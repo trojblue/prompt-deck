@@ -82,72 +82,63 @@ class ContextInput(QWidget):
             self.load_file(path)
 
     def load_file(self, filepath: str):
-        """Read file contents, store them in the text area, and remember the file name."""
+        """
+        Read file contents, store them in the text area, and remember the file name.
+        Now with improved path validation and better error handling.
+        """
+        from pathlib import Path
+        
         try:
-            file_text = Path(filepath).read_text(encoding="utf-8", errors="replace")
-            self.file_name = Path(filepath).name  # Just the filename
+            path_obj = Path(filepath)
+            
+            # Skip URL-like paths
+            if "://" in filepath and not path_obj.exists():
+                print(f"Skipping URL-like path: {filepath}")
+                return False
+                
+            # Verify the file exists and is readable
+            if not path_obj.exists():
+                print(f"File does not exist: {filepath}")
+                return False
+                
+            # Try to read the file, with fallback for binary files
+            try:
+                file_text = path_obj.read_text(encoding="utf-8", errors="replace")
+            except UnicodeDecodeError:
+                # For binary files, just note it's a binary file
+                file_text = f"[Binary file: {path_obj.name}]"
+            
+            self.file_name = path_obj.name  # Just the filename
             
             # Update the "notes" section with the filename
             self.name_input.setText(self.file_name)
             
             self.content_input.setPlainText(file_text)
             self.update_char_count()
+            return True
+            
         except Exception as e:
             print(f"Error reading file: {e}")
+            return False
 
     #
     # Drag-and-drop overrides
     #
     def dragEnterEvent(self, event):
-        """Accept a file if dragged into the widget."""
-        if event.mimeData().hasUrls():
-            # Check if at least one of them is a local file
-            urls = event.mimeData().urls()
-            if len(urls) > 0 and urls[0].isLocalFile():
-                event.acceptProposedAction()
-                
-                # Highlight effect for this context input
-                current_style = self.styleSheet()
-                self.setStyleSheet(current_style + """
-                    ContextInput {
-                        background-color: rgba(232, 245, 233, 0.5);
-                        border: 2px dashed #4CAF50;
-                        border-radius: 5px;
-                    }
-                """)
-        else:
-            super().dragEnterEvent(event)
+        """Accept file drags, but never let files be dropped directly into contexts."""
+        # We want to prevent files from being dropped directly into existing contexts
+        # Instead, we'll propagate the event up to the main window
+        event.ignore()
+
+    def dropEvent(self, event):
+        """Prevent dropping directly into contexts - pass to parent window."""
+        event.ignore()
             
     def dragLeaveEvent(self, event):
         """Reset styling when drag leaves."""
         # Restore original styling
         self.setStyleSheet("")
         super().dragLeaveEvent(event)
-
-    def dropEvent(self, event):
-        """When a file is dropped, load its contents."""
-        urls = event.mimeData().urls()
-        if urls and urls[0].isLocalFile():
-            filepath = urls[0].toLocalFile()
-            
-            # Flash a confirmation style briefly
-            self.setStyleSheet("""
-                ContextInput {
-                    background-color: rgba(232, 245, 233, 0.8);
-                    border: 2px solid #4CAF50;
-                    border-radius: 5px;
-                }
-            """)
-            
-            # Reset after a short delay
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(500, lambda: self.setStyleSheet(""))
-            
-            self.load_file(filepath)
-            event.acceptProposedAction()
-        else:
-            super().dropEvent(event)
-
     #
     # Existing methods
     #

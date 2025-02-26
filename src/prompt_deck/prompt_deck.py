@@ -185,7 +185,21 @@ class PromptDeck(QMainWindow):
         return context
 
     def handle_file_drop(self, filepath):
-        """Create a new context and load the file into it"""
+        """
+        Create a new context and load the file into it.
+        Now handles filepath validation before creating context.
+        """
+        from pathlib import Path
+        
+        # Handle case where an invalid or URL-like path is dropped
+        path_obj = Path(filepath)
+        
+        # Skip if it looks like a URL or invalid path
+        if not path_obj.exists() or "://" in filepath:
+            print(f"Skipping invalid file path: {filepath}")
+            return
+            
+        # Now create the context and load the file
         context = self.add_context()
         context.load_file(filepath)
 
@@ -306,9 +320,15 @@ class PromptDeck(QMainWindow):
     # Drag and Drop implementation for the entire window
     #
     def dragEnterEvent(self, event):
-        # Accept the drag event if it has URLs (files)
-        if event.mimeData().hasUrls() and len(event.mimeData().urls()) > 0:
-            if event.mimeData().urls()[0].isLocalFile():
+        """
+        Accept the drag event if it has URLs (files).
+        Now displays correct information for multi-file drop.
+        """
+        if event.mimeData().hasUrls():
+            # Count how many valid files we have
+            valid_file_count = sum(1 for url in event.mimeData().urls() if url.isLocalFile())
+            
+            if valid_file_count > 0:
                 event.acceptProposedAction()
                 
                 # Store original stylesheet if not already stored
@@ -318,6 +338,12 @@ class PromptDeck(QMainWindow):
                 
                 # Check if placeholder is visible and apply special styling
                 if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                    # Update placeholder text to show number of files
+                    if valid_file_count > 1:
+                        self.placeholder.text_label.setText(f"Drop to add {valid_file_count} files")
+                    else:
+                        self.placeholder.text_label.setText("Drop to add file")
+                    
                     self.placeholder.setStyleSheet("""
                         FilePlaceholder {
                             background-color: rgba(232, 245, 233, 0.7);
@@ -330,9 +356,11 @@ class PromptDeck(QMainWindow):
                     self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.5); border: 2px dashed #4CAF50; border-radius: 5px;")
     
     def dragLeaveEvent(self, event):
-        # Reset styling when drag leaves
+        """Reset styling when drag leaves."""
         if self.is_drag_active:
             if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                # Reset placeholder text
+                self.placeholder.text_label.setText("Add context or drop files here")
                 self.placeholder.setStyleSheet("""
                     FilePlaceholder {
                         background-color: #f8f9fa;
@@ -343,13 +371,15 @@ class PromptDeck(QMainWindow):
             else:
                 self.context_container.setStyleSheet("background-color: #fafafa;")
             self.is_drag_active = False
-    
+
+
     def dropEvent(self, event):
-        # When a file is dropped, create a new context with it
+        """
+        Improved drop event that handles multiple files and validates file paths.
+        Each valid file will create a new context.
+        """
         urls = event.mimeData().urls()
-        if urls and urls[0].isLocalFile():
-            filepath = urls[0].toLocalFile()
-            
+        if urls:
             # Temporarily flash the confirmation style
             if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
                 self.placeholder.setStyleSheet("""
@@ -362,8 +392,11 @@ class PromptDeck(QMainWindow):
             else:
                 self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.8); border: 2px solid #4CAF50; border-radius: 5px;")
             
-            # Now create the context and load the file
-            self.handle_file_drop(filepath)
+            # Process all valid local files in the drop event
+            for url in urls:
+                if url.isLocalFile():
+                    filepath = url.toLocalFile()
+                    self.handle_file_drop(filepath)
             
             # Reset after a short delay
             from PyQt6.QtCore import QTimer

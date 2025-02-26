@@ -35,7 +35,7 @@ class FilePlaceholder(QWidget):
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label)
         
-        # Instruction text
+        # Instruction text - now stored as a class attribute so it can be modified
         self.text_label = QLabel("Add context or drop files here")
         self.text_label.setFont(QFont(FONT_FAMILY, 12))
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
