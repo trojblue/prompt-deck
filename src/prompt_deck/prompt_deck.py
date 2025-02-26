@@ -19,7 +19,7 @@ from PyQt6.QtGui import (
 )
 
 from .styles import FONT_FAMILY
-from .styles import ui_style, delete_button_style, name_input_style, content_input_style, add_context_btn_style, copy_btn_style, main_prompt_style
+from .styles import ui_style, delete_button_style, name_input_style, content_input_style, add_context_btn_style, copy_btn_style, main_prompt_style, get_llm_button_style
 
 # Use more elegant fonts that are likely bundled with Windows
 # Try to use system fonts in fallback order for better cross-platform compatibility
@@ -207,9 +207,9 @@ class PromptDeck(QMainWindow):
 
         # LLM site shortcuts with more elegant, muted styling
         self.llm_sites = {
-            "ChatGPT": ("https://chat.openai.com", "#34495e"),  # Darker slate
-            "Claude":  ("https://claude.ai", "#7f8c8d"),        # Muted gray
-            "Grok":    ("https://grok.x.ai", "#95a5a6")         # Light gray
+            "ChatGPT": ("https://chat.openai.com", "#34495e"),  # Dark slate
+            "Claude":  ("https://claude.ai", "#ec6b2d"),        # Claude orange
+            "Grok":    ("https://grok.x.ai", "#333333")         # Dark gray (not pure black)
         }
 
         for name, (url, color) in self.llm_sites.items():
@@ -217,21 +217,7 @@ class PromptDeck(QMainWindow):
             btn.setFixedWidth(80)
             btn.setFont(QFont(FONT_FAMILY, 10))
             btn.clicked.connect(lambda checked, u=url: self.launch_site(u))
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {color};
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px;
-                }}
-                QPushButton:hover {{
-                    background-color: {color}dd;
-                }}
-                QPushButton:pressed {{
-                    background-color: {color}aa;
-                }}
-            """)
+            btn.setStyleSheet(get_llm_button_style(color))
             button_layout.addWidget(btn)
 
         main_layout.addLayout(button_layout)
