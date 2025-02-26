@@ -67,7 +67,7 @@ class PromptDeck(QMainWindow):
 
         # Improved text edit styling
         self.main_prompt = QTextEdit()
-        self.main_prompt.setMinimumHeight(100)
+        self.main_prompt.setMinimumHeight(40)
         self.main_prompt.setPlaceholderText("Enter your main prompt here...")
         self.main_prompt.setFont(QFont(FONT_FAMILY, 10))
         self.main_prompt.setStyleSheet(main_prompt_style)
@@ -117,6 +117,11 @@ class PromptDeck(QMainWindow):
         self.context_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.context_layout.setContentsMargins(0, 0, 0, 0)
         self.context_layout.setSpacing(10)
+        
+        # Add placeholder for empty context (better visual)
+        from .file_placeholder import FilePlaceholder
+        self.placeholder = FilePlaceholder()
+        self.context_layout.addWidget(self.placeholder)
 
         self.scroll.setWidget(self.context_container)
         main_layout.addWidget(self.scroll)
@@ -124,8 +129,8 @@ class PromptDeck(QMainWindow):
         # Keep track of contexts
         self.contexts = []
 
-        # Add one context by default
-        self.add_context()
+        # Don't add default context - just show placeholder
+        # self.add_context()
 
         # Add a separator before buttons
         separator2 = QFrame()
@@ -149,7 +154,7 @@ class PromptDeck(QMainWindow):
         self.llm_sites = {
             "ChatGPT": ("https://chat.openai.com", "#34495e"),  # Dark slate
             "Claude":  ("https://claude.ai", "#ec6b2d"),        # Claude orange
-            "Grok":    ("https://grok.x.ai", "#333333")         # Dark gray (not pure black)
+            "Grok":    ("https://x.com/i/grok", "#333333")         # Dark gray (not pure black)
         }
 
         for name, (url, color) in self.llm_sites.items():
@@ -166,6 +171,11 @@ class PromptDeck(QMainWindow):
         self.resize(520, 600)
 
     def add_context(self):
+        # Check if placeholder exists and remove it
+        if hasattr(self, 'placeholder') and self.placeholder is not None:
+            self.placeholder.setVisible(False)
+            self.placeholder = None
+            
         context = ContextInput()
         context.delete_button.clicked.connect(
             lambda: self.remove_context(context)
@@ -182,6 +192,13 @@ class PromptDeck(QMainWindow):
     def remove_context(self, context):
         if context in self.contexts:
             self.contexts.remove(context)
+            
+        # If no contexts left, show placeholder again
+        if not self.contexts:
+            if not hasattr(self, 'placeholder') or self.placeholder is None:
+                from .file_placeholder import FilePlaceholder
+                self.placeholder = FilePlaceholder()
+                self.context_layout.addWidget(self.placeholder)
 
     def copy_to_clipboard(self):
         formatted_text = self.get_formatted_text()
@@ -235,20 +252,32 @@ class PromptDeck(QMainWindow):
                 # Main prompt
                 self.main_prompt.setText(state.get("main_prompt", ""))
 
-                # Remove default contexts
+                # Remove default contexts and placeholder
+                if hasattr(self, 'placeholder') and self.placeholder is not None:
+                    self.placeholder.setVisible(False)
+                    self.placeholder = None
+                
                 for c in self.contexts:
                     c.setParent(None)
                 self.contexts.clear()
 
                 # Load from file
-                for context_data in state.get("contexts", []):
-                    context = ContextInput()
-                    context.set_data(context_data)
-                    context.delete_button.clicked.connect(
-                        lambda: self.remove_context(context)
-                    )
-                    self.contexts.append(context)
-                    self.context_layout.addWidget(context)
+                contexts_data = state.get("contexts", [])
+                if contexts_data:
+                    for context_data in contexts_data:
+                        context = ContextInput()
+                        context.set_data(context_data)
+                        context.delete_button.clicked.connect(
+                            lambda: self.remove_context(context)
+                        )
+                        self.contexts.append(context)
+                        self.context_layout.addWidget(context)
+                else:
+                    # If no contexts in saved state, show placeholder
+                    if not hasattr(self, 'placeholder') or self.placeholder is None:
+                        from .file_placeholder import FilePlaceholder
+                        self.placeholder = FilePlaceholder()
+                        self.context_layout.addWidget(self.placeholder)
 
                 # Geometry
                 geometry = state.get("geometry", {})
@@ -284,21 +313,35 @@ class PromptDeck(QMainWindow):
                 
                 # Store original stylesheet if not already stored
                 if not self.is_drag_active:
-                    self.original_stylesheet = self.styleSheet()
+                    self.original_stylesheet = self.context_container.styleSheet()
                     self.is_drag_active = True
                 
-                # Highlight effect for the entire window
-                self.setStyleSheet(self.original_stylesheet + """
-                    QMainWindow {
-                        border: 2px dashed #66bb6a;
-                        background-color: rgba(232, 245, 233, 0.2);
-                    }
-                """)
+                # Check if placeholder is visible and apply special styling
+                if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                    self.placeholder.setStyleSheet("""
+                        FilePlaceholder {
+                            background-color: rgba(232, 245, 233, 0.7);
+                            border: 2px dashed #4CAF50;
+                            border-radius: 8px;
+                        }
+                    """)
+                else:
+                    # Regular highlight effect for content container
+                    self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.5); border: 2px dashed #4CAF50; border-radius: 5px;")
     
     def dragLeaveEvent(self, event):
         # Reset styling when drag leaves
         if self.is_drag_active:
-            self.setStyleSheet(self.original_stylesheet)
+            if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                self.placeholder.setStyleSheet("""
+                    FilePlaceholder {
+                        background-color: #f8f9fa;
+                        border: 2px dashed #e0e0e0;
+                        border-radius: 8px;
+                    }
+                """)
+            else:
+                self.context_container.setStyleSheet("background-color: #fafafa;")
             self.is_drag_active = False
     
     def dropEvent(self, event):
@@ -306,19 +349,25 @@ class PromptDeck(QMainWindow):
         urls = event.mimeData().urls()
         if urls and urls[0].isLocalFile():
             filepath = urls[0].toLocalFile()
-            self.handle_file_drop(filepath)
             
-            # Flash a confirmation style briefly
-            self.setStyleSheet(self.original_stylesheet + """
-                QMainWindow {
-                    border: 2px solid #66bb6a;
-                    background-color: rgba(232, 245, 233, 0.1);
-                }
-            """)
+            # Temporarily flash the confirmation style
+            if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                self.placeholder.setStyleSheet("""
+                    FilePlaceholder {
+                        background-color: rgba(232, 245, 233, 0.8);
+                        border: 2px solid #4CAF50;
+                        border-radius: 8px;
+                    }
+                """)
+            else:
+                self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.8); border: 2px solid #4CAF50; border-radius: 5px;")
+            
+            # Now create the context and load the file
+            self.handle_file_drop(filepath)
             
             # Reset after a short delay
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(500, lambda: self.setStyleSheet(self.original_stylesheet))
+            QTimer.singleShot(500, lambda: self.context_container.setStyleSheet("background-color: #fafafa;"))
             self.is_drag_active = False
             
             event.acceptProposedAction()

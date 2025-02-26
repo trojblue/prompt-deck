@@ -20,7 +20,6 @@ class ContextInput(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        # Add right margin to prevent scrollbar interference with main scrollbar
         layout.setContentsMargins(0, 2, 10, 2)  # Added 10px right margin
         layout.setSpacing(2)
 
@@ -33,16 +32,15 @@ class ContextInput(QWidget):
 
         # Content input / text area
         self.content_input = QTextEdit()
-        self.content_input.setFixedHeight(80)
+        self.content_input.setFixedHeight(150)  # Increased from 80 to 150
         self.content_input.setPlaceholderText("Content")
         self.content_input.setFont(QFont(FONT_FAMILY, 10))
         self.content_input.textChanged.connect(self.update_char_count)
-        # Add right padding to the content input itself for better scrollbar spacing
         modified_content_style = content_input_style + "padding-right: 5px;"
         self.content_input.setStyleSheet(modified_content_style)
         layout.addWidget(self.content_input)
 
-        # Bottom row
+        # Bottom row (unchanged)
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(5)
 
@@ -107,14 +105,44 @@ class ContextInput(QWidget):
             urls = event.mimeData().urls()
             if len(urls) > 0 and urls[0].isLocalFile():
                 event.acceptProposedAction()
+                
+                # Highlight effect for this context input
+                current_style = self.styleSheet()
+                self.setStyleSheet(current_style + """
+                    ContextInput {
+                        background-color: rgba(232, 245, 233, 0.5);
+                        border: 2px dashed #4CAF50;
+                        border-radius: 5px;
+                    }
+                """)
         else:
             super().dragEnterEvent(event)
+            
+    def dragLeaveEvent(self, event):
+        """Reset styling when drag leaves."""
+        # Restore original styling
+        self.setStyleSheet("")
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         """When a file is dropped, load its contents."""
         urls = event.mimeData().urls()
         if urls and urls[0].isLocalFile():
             filepath = urls[0].toLocalFile()
+            
+            # Flash a confirmation style briefly
+            self.setStyleSheet("""
+                ContextInput {
+                    background-color: rgba(232, 245, 233, 0.8);
+                    border: 2px solid #4CAF50;
+                    border-radius: 5px;
+                }
+            """)
+            
+            # Reset after a short delay
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: self.setStyleSheet(""))
+            
             self.load_file(filepath)
             event.acceptProposedAction()
         else:
