@@ -50,8 +50,8 @@
 ## 🎨 Interface
 
 <div align="center">
-  <img src="https://via.placeholder.com/600x300?text=Prompt+Deck+Screenshot" alt="Prompt Deck Interface" width="600"/>
-  <p><em>Replace this with an actual screenshot of your app</em></p>
+  <img src="./docs/deck.png" alt="Prompt Deck Interface" width="600"/>
+  <p><em>Works on Windows, macOS, and Linux!</em></p>
 </div>
 
 ### Main Components:
