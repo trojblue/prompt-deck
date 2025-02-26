@@ -50,11 +50,12 @@
 ## 🎨 Interface
 
 <div align="center">
-  <img src="./docs/deck.png" alt="Prompt Deck Interface" width="600"/>
+  <img src="./docs/deck.png" alt="Prompt Deck Interface" width="640"/>
   <p><em>Works on Windows, macOS, and Linux!</em></p>
 </div>
 
 ### Main Components:
+
 - **Main Prompt Area**: A spacious text field for your primary prompt
 - **Context Sections**: Expandable sections with:
   - Notes field for labeling context
@@ -64,19 +65,12 @@
   - Copy to Clipboard
   - Direct launch buttons for popular AI assistants
 
-## 🚀 Installation
-
-```bash
-# Install from PyPI
-pip install prompt-deck
-
-# Or install from source
-git clone https://github.com/yourusername/prompt-deck.git
-cd prompt-deck
-pip install -e .
-```
-
 ## 💫 Usage
+
+<div align="center">
+  <img src="./docs/deck.gif" alt="Prompt Deck Interface" width="540"/>
+  <p><em>Drop file & prompt, as seen in cursor™</em></p>
+</div>
 
 1. **Launch the app**:
    ```bash
@@ -100,6 +94,20 @@ pip install -e .
      - 🤖 ChatGPT (chat.openai.com)
      - 🎭 Claude (claude.ai)
      - ✨ Grok (x.com/i/grok)
+
+
+## 🚀 Installation
+
+```bash
+# Install from PyPI
+pip install prompt-deck
+
+# Or install from source
+git clone https://github.com/yourusername/prompt-deck.git
+cd prompt-deck
+pip install -e .
+```
+
 
 ## 💾 Data Storage
 
