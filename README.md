@@ -2,14 +2,17 @@
 
 <div align="center">
   
-<img src="https://img.shields.io/badge/platform-windows-blue?style=for-the-badge&logo=windows" alt="Windows">
+<img src="https://img.shields.io/badge/platform-windows-blue?style=for-the-badge&logo=windows" alt="windows">
+<img src="https://img.shields.io/badge/platform-macOS-black?style=for-the-badge&logo=apple" alt="macos">
+<img src="https://img.shields.io/badge/platform-linux-orange?style=for-the-badge&logo=linux" alt="linux">
+<br>
 <img src="https://img.shields.io/badge/python-%3E%3D3.8-green?style=for-the-badge&logo=python" alt="Python">
 <img src="https://img.shields.io/badge/license-MIT-orange?style=for-the-badge" alt="License">
 
 <h3>✨ Your Smart Prompt Management Companion ✨</h3>
 
 <p>
-  <strong>Prompt Deck</strong> is a lightweight Windows utility that helps you structure and manage your LLM prompts with style.
+  <strong>Prompt Deck</strong> is a lightweight cross-platform utility that helps you structure and manage your LLM prompts with style.
   Perfect for power users who work with multiple AI assistants!
 </p>
 
@@ -115,7 +118,7 @@ Prompt Deck features a modern, clean interface with:
 
 ## 🛠️ Technical Details
 
-- Built with PyQt6 for a native Windows experience
+- Built with PyQt6 for a native cross-platform experience
 - Uses system font stack for optimal rendering
 - Implements efficient file handling with drag & drop support
 - Saves state in JSON format for easy backup/restore
