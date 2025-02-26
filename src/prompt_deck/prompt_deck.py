@@ -19,79 +19,10 @@ from PyQt6.QtGui import (
 )
 
 from .styles import FONT_FAMILY
-from .styles import ui_style, delete_button_style, name_input_style, content_input_style, add_context_btn_style, copy_btn_style, main_prompt_style, get_llm_button_style
+from .styles import ui_style, add_context_btn_style, copy_btn_style, main_prompt_style, get_llm_button_style
 
-# Use more elegant fonts that are likely bundled with Windows
-# Try to use system fonts in fallback order for better cross-platform compatibility
-
-
-class ContextInput(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(2)
-
-        # Context name input
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Context Name")
-        self.name_input.setFont(QFont(FONT_FAMILY, 10))
-        self.name_input.setStyleSheet(name_input_style)
-        layout.addWidget(self.name_input)
-
-        # Context content input
-        self.content_input = QTextEdit()
-        self.content_input.setFixedHeight(80)
-        self.content_input.setPlaceholderText("Context Content")
-        self.content_input.setFont(QFont(FONT_FAMILY, 10))
-        self.content_input.textChanged.connect(self.update_char_count)
-        self.content_input.setStyleSheet(content_input_style)
-        layout.addWidget(self.content_input)
-
-        # Bottom row
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(2)
-
-        # Character count label
-        self.char_count_label = QLabel("Characters: 0")
-        self.char_count_label.setFont(QFont(FONT_FAMILY, 8))
-        self.char_count_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
-        bottom_row.addWidget(self.char_count_label)
-
-        bottom_row.addStretch()
-
-        # Delete button
-        self.delete_button = QPushButton("Remove")
-        self.delete_button.setFixedWidth(80)
-        self.delete_button.setFont(QFont(FONT_FAMILY, 9))
-        self.delete_button.clicked.connect(self.on_delete)
-        self.delete_button.setStyleSheet(delete_button_style)
-        bottom_row.addWidget(self.delete_button)
-
-        layout.addLayout(bottom_row)
-
-    def on_delete(self):
-        # Removes itself from its layout and the main list
-        self.setParent(None)
-        self.deleteLater()
-
-    def update_char_count(self):
-        count = len(self.content_input.toPlainText())
-        self.char_count_label.setText(f"Characters: {count}")
-
-    def get_data(self) -> Dict[str, str]:
-        return {
-            "name": self.name_input.text(),
-            "content": self.content_input.toPlainText()
-        }
-
-    def set_data(self, data: Dict[str, str]):
-        self.name_input.setText(data.get("name", ""))
-        self.content_input.setText(data.get("content", ""))
-        self.update_char_count()
+from .context_input import ContextInput
+from .file_drop_area import FileDropArea  # We'll create this class
 
 
 class PromptDeck(QMainWindow):
@@ -101,6 +32,13 @@ class PromptDeck(QMainWindow):
 
         # Use a nicer system icon for a more professional look
         self.setWindowIcon(QIcon(QApplication.style().standardIcon(QApplication.style().StandardPixmap.SP_FileDialogContentsView)))
+        
+        # Enable drag and drop for the entire window
+        self.setAcceptDrops(True)
+        
+        # Variable to track highlight state
+        self.is_drag_active = False
+        self.original_stylesheet = ""
 
         # Setup UI
         self.setup_ui()
@@ -151,6 +89,8 @@ class PromptDeck(QMainWindow):
         context_label.setStyleSheet("color: #2c3e50;")
         context_section.addWidget(context_label)
         context_section.addStretch()
+
+        # Removed file drop area - entire window will be a drop area instead
 
         # Improved button styling
         add_context_btn = QPushButton("Add Context")
@@ -232,6 +172,12 @@ class PromptDeck(QMainWindow):
         )
         self.contexts.append(context)
         self.context_layout.addWidget(context)
+        return context
+
+    def handle_file_drop(self, filepath):
+        """Create a new context and load the file into it"""
+        context = self.add_context()
+        context.load_file(filepath)
 
     def remove_context(self, context):
         if context in self.contexts:
@@ -327,6 +273,56 @@ class PromptDeck(QMainWindow):
         except Exception as e:
             print(f"Error saving state: {e}")
 
+    #
+    # Drag and Drop implementation for the entire window
+    #
+    def dragEnterEvent(self, event):
+        # Accept the drag event if it has URLs (files)
+        if event.mimeData().hasUrls() and len(event.mimeData().urls()) > 0:
+            if event.mimeData().urls()[0].isLocalFile():
+                event.acceptProposedAction()
+                
+                # Store original stylesheet if not already stored
+                if not self.is_drag_active:
+                    self.original_stylesheet = self.styleSheet()
+                    self.is_drag_active = True
+                
+                # Highlight effect for the entire window
+                self.setStyleSheet(self.original_stylesheet + """
+                    QMainWindow {
+                        border: 2px dashed #66bb6a;
+                        background-color: rgba(232, 245, 233, 0.2);
+                    }
+                """)
+    
+    def dragLeaveEvent(self, event):
+        # Reset styling when drag leaves
+        if self.is_drag_active:
+            self.setStyleSheet(self.original_stylesheet)
+            self.is_drag_active = False
+    
+    def dropEvent(self, event):
+        # When a file is dropped, create a new context with it
+        urls = event.mimeData().urls()
+        if urls and urls[0].isLocalFile():
+            filepath = urls[0].toLocalFile()
+            self.handle_file_drop(filepath)
+            
+            # Flash a confirmation style briefly
+            self.setStyleSheet(self.original_stylesheet + """
+                QMainWindow {
+                    border: 2px solid #66bb6a;
+                    background-color: rgba(232, 245, 233, 0.1);
+                }
+            """)
+            
+            # Reset after a short delay
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: self.setStyleSheet(self.original_stylesheet))
+            self.is_drag_active = False
+            
+            event.acceptProposedAction()
+    
     def closeEvent(self, event):
         # Save state before closing
         self.save_state()
