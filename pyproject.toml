@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prompt-deck"
+version = "0.1.0"
+description = "A lightweight Windows utility for structuring LLM prompts"
+readme = "README.md"
+authors = [
+    { name = "yada", email = "trojblue@gmail.com" }
+]
+requires-python = ">=3.8"
+license = "MIT"
+dependencies = [
+    "PyQt6>=6.6.1",
+    "keyboard>=0.13.5",
+    "appdirs>=1.4.4",
+]
+
+[project.scripts]
+prompt-deck = "prompt_deck.prompt_deck:main"
