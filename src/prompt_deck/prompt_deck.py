@@ -1,7 +1,8 @@
 import sys
 import json
+import time
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Optional
 import webbrowser
 
 from appdirs import user_data_dir
@@ -10,21 +11,83 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QTextEdit, QLineEdit, QPushButton,
     QLabel, QScrollArea, QFrame, QSizePolicy, QMessageBox,
-    QSplitter
+    QSplitter, QStatusBar, QMenu
 )
+from PyQt6.QtGui import QShortcut
+
 from PyQt6.QtCore import (
-    Qt, QSize, QTimer
+    Qt, QSize, QTimer, QPoint, QPropertyAnimation
 )
 from PyQt6.QtGui import (
-    QFont, QIcon, QColor, QPalette
+    QFont, QIcon, QColor, QPalette, QKeySequence, QAction
 )
 
 from .styles import FONT_FAMILY
-from .styles import ui_style, add_context_btn_style, copy_btn_style, main_prompt_style
-from .styles import get_llm_button_style, delete_button_style
+from .styles import (ui_style, add_context_btn_style, copy_btn_style, main_prompt_style, 
+                   get_llm_button_style, delete_button_style, clear_all_style,
+                   duplicate_context_style, toast_style, context_section_style)
 
 from .context_input import ContextInput, FileContextInput
 from .file_drop_area import FileDropArea
+
+
+class ToastNotification(QFrame):
+    """Toast notification widget for status messages"""
+    
+    def __init__(self, parent, message, duration=3000):
+        super().__init__(parent)
+        self.setStyleSheet(toast_style)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip)
+        
+        # Setup layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        
+        # Message label
+        self.message_label = QLabel(message)
+        self.message_label.setStyleSheet("color: white;")
+        self.message_label.setFont(QFont(FONT_FAMILY, 10))
+        layout.addWidget(self.message_label)
+        
+        # Position and show
+        self.duration = duration
+        self.setWindowOpacity(0.0)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.hide_animation)
+        self.timer.setSingleShot(True)
+        
+        # Fade in animation
+        self.fade_in()
+        
+    def fade_in(self):
+        """Animate fade in"""
+        self.show()
+        
+        # Position at the bottom center of parent
+        parent_rect = self.parent().rect()
+        x = parent_rect.center().x() - self.width() // 2
+        y = parent_rect.bottom() - self.height() - 20  # 20px from bottom
+        
+        self.move(self.parent().mapToGlobal(QPoint(x, y)))
+        
+        # Fade in animation
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(300)
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.start()
+        
+        # Start timer for auto-hide
+        self.timer.start(self.duration)
+        
+    def hide_animation(self):
+        """Animate fade out and hide"""
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(300)
+        self.animation.setStartValue(1.0)
+        self.animation.setEndValue(0.0)
+        self.animation.finished.connect(self.hide)
+        self.animation.start()
 
 
 class PromptDeck(QMainWindow):
@@ -44,10 +107,19 @@ class PromptDeck(QMainWindow):
         
         # Store timer for style reset
         self.style_reset_timer = None
+        
+        # Undo/redo stack for text edits
+        self.undo_stack = []
+        self.redo_stack = []
+        self.current_state = None
 
         # Setup UI
         self.setup_ui()
+        self.setup_shortcuts()
         self.load_state()
+        
+        # Show initial tip
+        QTimer.singleShot(500, lambda: self.show_toast("Tip: Drag the contexts by their left handles to reorder them"))
 
     def setup_ui(self):
         # Set the application style - more elegant, muted color palette
@@ -71,10 +143,21 @@ class PromptDeck(QMainWindow):
         prompt_layout.setSpacing(4)
 
         # Improved label styling
+        prompt_header = QHBoxLayout()
         prompt_label = QLabel("Main Prompt")
         prompt_label.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Medium))
         prompt_label.setStyleSheet("color: #2c3e50; margin-bottom: 4px;")
-        prompt_layout.addWidget(prompt_label)
+        prompt_header.addWidget(prompt_label)
+        
+        prompt_header.addStretch()
+        
+        # Character count for main prompt
+        self.main_prompt_char_count = QLabel("Characters: 0")
+        self.main_prompt_char_count.setFont(QFont(FONT_FAMILY, 8))
+        self.main_prompt_char_count.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        prompt_header.addWidget(self.main_prompt_char_count)
+        
+        prompt_layout.addLayout(prompt_header)
 
         # Improved text edit styling
         self.main_prompt = QTextEdit()
@@ -82,6 +165,7 @@ class PromptDeck(QMainWindow):
         self.main_prompt.setPlaceholderText("Enter your main prompt here...")
         self.main_prompt.setFont(QFont(FONT_FAMILY, 10))
         self.main_prompt.setStyleSheet(main_prompt_style)
+        self.main_prompt.textChanged.connect(self.update_main_prompt_char_count)
         prompt_layout.addWidget(self.main_prompt)
         
         # Add top widget to splitter
@@ -99,6 +183,13 @@ class PromptDeck(QMainWindow):
         context_label.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Medium))
         context_label.setStyleSheet("color: #2c3e50;")
         context_section.addWidget(context_label)
+        
+        # Total character count for all contexts
+        self.total_char_count = QLabel("Total: 0 chars")
+        self.total_char_count.setFont(QFont(FONT_FAMILY, 8))
+        self.total_char_count.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        context_section.addWidget(self.total_char_count)
+        
         context_section.addStretch()
 
         # Clear All button
@@ -106,7 +197,8 @@ class PromptDeck(QMainWindow):
         clear_all_btn.setFixedWidth(80)
         clear_all_btn.setFont(QFont(FONT_FAMILY, 9))
         clear_all_btn.clicked.connect(self.clear_all_contexts)
-        clear_all_btn.setStyleSheet(delete_button_style)
+        clear_all_btn.setStyleSheet(clear_all_style)
+        clear_all_btn.setToolTip("Remove all context sections (Ctrl+Shift+X)")
         context_section.addWidget(clear_all_btn)
 
         # File context button
@@ -115,6 +207,7 @@ class PromptDeck(QMainWindow):
         add_file_context_btn.setFont(QFont(FONT_FAMILY, 9))
         add_file_context_btn.clicked.connect(self.add_file_context)
         add_file_context_btn.setStyleSheet(add_context_btn_style)
+        add_file_context_btn.setToolTip("Add a file reference context (Ctrl+Shift+F)")
         context_section.addWidget(add_file_context_btn)
 
         # Add Context button
@@ -123,6 +216,7 @@ class PromptDeck(QMainWindow):
         add_context_btn.setFont(QFont(FONT_FAMILY, 9))
         add_context_btn.clicked.connect(self.add_context)
         add_context_btn.setStyleSheet(add_context_btn_style)
+        add_context_btn.setToolTip("Add a text context (Ctrl+Shift+N)")
         context_section.addWidget(add_context_btn)
 
         context_container_layout.addLayout(context_section)
@@ -174,11 +268,20 @@ class PromptDeck(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)  # Add better spacing between buttons
 
+        # Preview button - shows output without copying
+        self.preview_btn = QPushButton("Preview")
+        self.preview_btn.setFont(QFont(FONT_FAMILY, 10))
+        self.preview_btn.clicked.connect(self.preview_formatted_text)
+        self.preview_btn.setStyleSheet(duplicate_context_style)
+        self.preview_btn.setToolTip("Preview the formatted output (Ctrl+P)")
+        button_layout.addWidget(self.preview_btn)
+
         # Copy to clipboard
         self.copy_btn = QPushButton("Copy to Clipboard")
         self.copy_btn.setFont(QFont(FONT_FAMILY, 10))
         self.copy_btn.clicked.connect(self.copy_to_clipboard)
         self.copy_btn.setStyleSheet(copy_btn_style)
+        self.copy_btn.setToolTip("Copy to clipboard (Ctrl+C)")
         button_layout.addWidget(self.copy_btn)
 
         # LLM site shortcuts with more elegant, muted styling
@@ -192,14 +295,75 @@ class PromptDeck(QMainWindow):
             btn = QPushButton(name)
             btn.setFixedWidth(80)
             btn.setFont(QFont(FONT_FAMILY, 10))
-            btn.clicked.connect(lambda checked, u=url: self.launch_site(u))
+            btn.clicked.connect(lambda checked, u=url, n=name: self.launch_site(u, n))
             btn.setStyleSheet(get_llm_button_style(color))
             button_layout.addWidget(btn)
 
         main_layout.addLayout(button_layout)
+        
+        # Add status bar
+        self.status_bar = QStatusBar()
+        self.status_bar.setFont(QFont(FONT_FAMILY, 9))
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Ready")
 
         # More refined window size with better proportions
         self.resize(520, 600)
+
+    def setup_shortcuts(self):
+        """Setup keyboard shortcuts for common actions"""
+        # Add context (Ctrl+Shift+N)
+        self.shortcut_add_context = QShortcut(QKeySequence("Ctrl+Shift+N"), self)
+        self.shortcut_add_context.activated.connect(self.add_context)
+        
+        # Add file context (Ctrl+Shift+F)
+        self.shortcut_add_file = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
+        self.shortcut_add_file.activated.connect(self.add_file_context)
+        
+        # Clear all contexts (Ctrl+Shift+X)
+        self.shortcut_clear_all = QShortcut(QKeySequence("Ctrl+Shift+X"), self)
+        self.shortcut_clear_all.activated.connect(self.clear_all_contexts)
+        
+        # Copy to clipboard (Ctrl+C)
+        self.shortcut_copy = QShortcut(QKeySequence("Ctrl+C"), self)
+        self.shortcut_copy.activated.connect(self.copy_to_clipboard)
+        
+        # Preview (Ctrl+P)
+        self.shortcut_preview = QShortcut(QKeySequence("Ctrl+P"), self)
+        self.shortcut_preview.activated.connect(self.preview_formatted_text)
+        
+        # Save (Ctrl+S)
+        self.shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut_save.activated.connect(self.save_state)
+
+    def update_main_prompt_char_count(self):
+        """Update the character count for main prompt"""
+        count = len(self.main_prompt.toPlainText())
+        self.main_prompt_char_count.setText(f"Characters: {count}")
+        
+        # Update the state to enable undo/redo
+        self.update_state()
+        
+    def update_state(self):
+        """Store current state for undo/redo"""
+        # TODO: Implement full undo/redo functionality later
+        pass
+        
+    def update_total_char_count(self):
+        """Update the total character count for all contexts"""
+        try:
+            total = len(self.main_prompt.toPlainText())
+            
+            # Add character counts from context sections
+            for context in self.contexts:
+                if hasattr(context, 'content_input'):
+                    total += len(context.content_input.toPlainText())
+                elif hasattr(context, 'char_count'):
+                    total += context.char_count
+            
+            self.total_char_count.setText(f"Total: {total} chars")
+        except Exception as e:
+            print(f"Error updating total char count: {e}")
 
     def add_context(self):
         """Add a regular text context input"""
@@ -209,11 +373,20 @@ class PromptDeck(QMainWindow):
             self.placeholder = None
             
         context = ContextInput()
-        # Use a more robust callback approach with unique identifier
+        # Configure the context
         context.id = id(context)  # Store unique ID
         context.delete_button.clicked.connect(self.on_delete_context)
+        context.duplicateRequested.connect(self.duplicate_context)
+        
+        # Add special visual styling
+        context.setStyleSheet(context_section_style)
+        
         self.contexts.append(context)
         self.context_layout.addWidget(context)
+        
+        # Update char count
+        QTimer.singleShot(100, self.update_total_char_count)
+        
         return context
 
     def add_file_context(self):
@@ -227,6 +400,10 @@ class PromptDeck(QMainWindow):
         file_context = FileContextInput()
         file_context.id = id(file_context)
         file_context.delete_button.clicked.connect(self.on_delete_context)
+        file_context.duplicateRequested.connect(self.duplicate_context)
+        
+        # Add special visual styling
+        file_context.setStyleSheet(context_section_style)
         
         # Add to context list and layout
         self.contexts.append(file_context)
@@ -238,6 +415,9 @@ class PromptDeck(QMainWindow):
             path, _ = QFileDialog.getOpenFileName(self, "Select a File", "", "All Files (*)")
             if path:
                 file_context.set_file_path(path)
+                
+                # Update char count
+                QTimer.singleShot(1000, self.update_total_char_count)
             else:
                 # If no file selected, remove the context
                 self.remove_context(file_context)
@@ -246,6 +426,38 @@ class PromptDeck(QMainWindow):
             print(f"Error opening file dialog: {e}")
         
         return file_context
+
+    def duplicate_context(self, context):
+        """Duplicate a context with its content"""
+        if hasattr(context, 'create_duplicate'):
+            try:
+                # Create a duplicate
+                duplicate = context.create_duplicate()
+                duplicate.id = id(duplicate)
+                duplicate.delete_button.clicked.connect(self.on_delete_context)
+                duplicate.duplicateRequested.connect(self.duplicate_context)
+                
+                # Add special visual styling
+                duplicate.setStyleSheet(context_section_style)
+                
+                # Insert after the original context
+                index = self.contexts.index(context)
+                self.contexts.insert(index + 1, duplicate)
+                
+                # Add to layout at the correct position
+                self.context_layout.insertWidget(index + 1, duplicate)
+                
+                # Show notification
+                self.show_toast("Context duplicated")
+                
+                # Update char count
+                QTimer.singleShot(100, self.update_total_char_count)
+                
+            except Exception as e:
+                print(f"Error duplicating context: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to duplicate context: {e}")
+        else:
+            print("Context doesn't support duplication")
 
     def clear_all_contexts(self):
         """Remove all contexts"""
@@ -260,8 +472,15 @@ class PromptDeck(QMainWindow):
                 # Disconnect signals and remove widgets
                 for context in list(self.contexts):
                     self.remove_context(context)
+                    
+                # Show confirmation
+                self.show_toast("All contexts cleared")
+                
+                # Update char count
+                QTimer.singleShot(100, self.update_total_char_count)
         except Exception as e:
             print(f"Error clearing contexts: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to clear contexts: {e}")
 
     def on_delete_context(self):
         """Handles delete button clicks from context objects"""
@@ -275,6 +494,51 @@ class PromptDeck(QMainWindow):
                 
         if context_to_remove:
             self.remove_context(context_to_remove)
+            
+            # Update char count
+            QTimer.singleShot(100, self.update_total_char_count)
+
+    def reorder_contexts(self, source_id, target_id):
+        """Reorder contexts when drag-and-drop occurs"""
+        try:
+            # Find source and target indices
+            source_context = None
+            target_context = None
+            
+            for ctx in self.contexts:
+                if ctx.id == source_id:
+                    source_context = ctx
+                elif ctx.id == target_id:
+                    target_context = ctx
+            
+            if not source_context or not target_context:
+                return
+                
+            # Get indices
+            source_index = self.contexts.index(source_context)
+            target_index = self.contexts.index(target_context)
+            
+            if source_index == target_index:
+                return
+                
+            # Remove from original position
+            self.contexts.remove(source_context)
+            
+            # Insert at new position (before target)
+            insert_index = self.contexts.index(target_context)
+            self.contexts.insert(insert_index, source_context)
+            
+            # Update the UI (remove and re-add widgets in correct order)
+            for ctx in self.contexts:
+                self.context_layout.removeWidget(ctx)
+                
+            for ctx in self.contexts:
+                self.context_layout.addWidget(ctx)
+                
+            # Show notification
+            self.show_toast("Context order updated")
+        except Exception as e:
+            print(f"Error reordering contexts: {e}")
 
     def handle_file_drop(self, filepath):
         """
@@ -289,17 +553,23 @@ class PromptDeck(QMainWindow):
             # Skip if it looks like a URL or invalid path
             if any(proto in str(path_obj) for proto in ['http:', 'https:', 'ftp:', 'file:']):
                 print(f"Skipping URL-like path: {filepath}")
+                self.show_toast(f"Invalid URL: {filepath}", 2000)
                 return
                 
             # Skip if file doesn't exist
             if not path_obj.exists():
                 print(f"File does not exist: {filepath}")
+                self.show_toast(f"File not found: {filepath}", 2000)
                 return
                 
             # Now create a file context and set the path
             file_context = FileContextInput()
             file_context.id = id(file_context)
             file_context.delete_button.clicked.connect(self.on_delete_context)
+            file_context.duplicateRequested.connect(self.duplicate_context)
+            
+            # Add special visual styling
+            file_context.setStyleSheet(context_section_style)
             
             # Check if placeholder exists and remove it
             if hasattr(self, 'placeholder') and self.placeholder is not None:
@@ -312,6 +582,12 @@ class PromptDeck(QMainWindow):
             
             # Set the file path
             file_context.set_file_path(filepath)
+            
+            # Show confirmation toast
+            self.show_toast(f"Added file: {path_obj.name}")
+            
+            # Update char count
+            QTimer.singleShot(1000, self.update_total_char_count)
         except Exception as e:
             print(f"Error handling file drop: {e}")
             # Show error message to user
@@ -321,9 +597,12 @@ class PromptDeck(QMainWindow):
         if context in self.contexts:
             # Disconnect signals first to prevent callbacks on deleted objects
             try:
-                context.delete_button.clicked.disconnect()
+                if hasattr(context, 'delete_button') and context.delete_button:
+                    context.delete_button.clicked.disconnect()
                 if hasattr(context, 'content_input') and hasattr(context.content_input, 'textChanged'):
                     context.content_input.textChanged.disconnect()
+                if hasattr(context, 'duplicateRequested'):
+                    context.duplicateRequested.disconnect()
                 
                 # Cancel any running file threads
                 if hasattr(context, 'file_thread') and hasattr(context.file_thread, 'isRunning') and context.file_thread.isRunning():
@@ -335,38 +614,146 @@ class PromptDeck(QMainWindow):
                 
             self.contexts.remove(context)
             
+            # First, remove from layout
+            self.context_layout.removeWidget(context)
+            
+            # Then set parent to None to ensure deletion
+            context.setParent(None)
+            
+            # Finally, schedule for deletion
+            context.deleteLater()
+            
         # If no contexts left, show placeholder again
         if not self.contexts:
             if not hasattr(self, 'placeholder') or self.placeholder is None:
                 from .file_placeholder import FilePlaceholder
                 self.placeholder = FilePlaceholder()
                 self.context_layout.addWidget(self.placeholder)
+                
+            # Update status bar
+            self.status_bar.showMessage("No contexts added yet")
 
     def copy_to_clipboard(self):
         try:
+            # Update status
+            self.status_bar.showMessage("Preparing content...")
+            
             # Load latest file content before copying
             self.reload_file_contents()
             
+            # Get the formatted text
             formatted_text = self.get_formatted_text()
+            
+            # Copy to clipboard
             clipboard = QApplication.clipboard()
             clipboard.setText(formatted_text)
+            
+            # Show success message
+            self.status_bar.showMessage(f"Copied {len(formatted_text)} characters to clipboard", 3000)
+            
+            # Show toast notification
+            self.show_toast("Copied to clipboard")
+            
+            # Update character counts
+            self.update_total_char_count()
         except Exception as e:
+            print(f"Error copying to clipboard: {e}")
+            self.status_bar.showMessage(f"Error: {e}", 3000)
             QMessageBox.critical(self, "Error", f"Failed to copy to clipboard: {e}")
+
+    def preview_formatted_text(self):
+        """Show a preview of the formatted text"""
+        try:
+            # Update status
+            self.status_bar.showMessage("Preparing preview...")
+            
+            # Load latest file content
+            self.reload_file_contents()
+            
+            # Get the formatted text
+            formatted_text = self.get_formatted_text()
+            
+            # Show preview dialog
+            preview = QDialog(self)
+            preview.setWindowTitle("Preview")
+            preview.setMinimumSize(500, 400)
+            
+            # Layout
+            layout = QVBoxLayout(preview)
+            
+            # Preview text area
+            preview_text = QTextEdit()
+            preview_text.setReadOnly(True)
+            preview_text.setFont(QFont(FONT_FAMILY, 10))
+            preview_text.setPlainText(formatted_text)
+            layout.addWidget(preview_text)
+            
+            # Info label
+            info_label = QLabel(f"Total: {len(formatted_text)} characters")
+            info_label.setFont(QFont(FONT_FAMILY, 9))
+            info_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(info_label)
+            
+            # Buttons
+            buttons_layout = QHBoxLayout()
+            
+            # Copy button
+            copy_btn = QPushButton("Copy to Clipboard")
+            copy_btn.clicked.connect(lambda: (clipboard.setText(formatted_text), 
+                                            self.show_toast("Copied to clipboard"),
+                                            preview.accept()))
+            buttons_layout.addWidget(copy_btn)
+            
+            # Close button
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(preview.accept)
+            buttons_layout.addWidget(close_btn)
+            
+            layout.addLayout(buttons_layout)
+            
+            # Get clipboard ready
+            clipboard = QApplication.clipboard()
+            
+            # Show dialog
+            preview.exec()
+            
+            # Update status
+            self.status_bar.showMessage("Preview closed", 3000)
+            
+        except Exception as e:
+            print(f"Error showing preview: {e}")
+            self.status_bar.showMessage(f"Error: {e}", 3000)
+            QMessageBox.critical(self, "Error", f"Failed to generate preview: {e}")
 
     def reload_file_contents(self):
         """Reload the latest content from all file contexts"""
         try:
+            # Update status
+            self.status_bar.showMessage("Reading file contents...", 1000)
+            
             for context in self.contexts:
                 if isinstance(context, FileContextInput) and hasattr(context, 'read_latest_content'):
                     context.read_latest_content()
         except Exception as e:
             print(f"Error reloading file contents: {e}")
+            self.status_bar.showMessage(f"Error reading files: {e}", 3000)
 
-    def launch_site(self, url: str):
+    def launch_site(self, url: str, site_name: str):
         try:
+            # Update status
+            self.status_bar.showMessage(f"Launching {site_name}...")
+            
+            # Copy to clipboard
             self.copy_to_clipboard()
+            
+            # Launch the site
             webbrowser.open(url)
+            
+            # Update status
+            self.status_bar.showMessage(f"Launched {site_name}", 3000)
         except Exception as e:
+            print(f"Error launching site: {e}")
+            self.status_bar.showMessage(f"Error: {e}", 3000)
             QMessageBox.critical(self, "Error", f"Failed to open website: {e}")
 
     def get_formatted_text(self) -> str:
@@ -449,6 +836,7 @@ class PromptDeck(QMainWindow):
                     state = json.load(f)
                 # Main prompt
                 self.main_prompt.setText(state.get("main_prompt", ""))
+                self.update_main_prompt_char_count()
 
                 # Remove default contexts and placeholder
                 if hasattr(self, 'placeholder') and self.placeholder is not None:
@@ -473,6 +861,8 @@ class PromptDeck(QMainWindow):
                             file_context = FileContextInput()
                             file_context.id = id(file_context)
                             file_context.delete_button.clicked.connect(self.on_delete_context)
+                            file_context.duplicateRequested.connect(self.duplicate_context)
+                            file_context.setStyleSheet(context_section_style)
                             file_context.set_data(context_data)
                             self.contexts.append(file_context)
                             self.context_layout.addWidget(file_context)
@@ -481,6 +871,8 @@ class PromptDeck(QMainWindow):
                             context = ContextInput()
                             context.id = id(context)
                             context.delete_button.clicked.connect(self.on_delete_context)
+                            context.duplicateRequested.connect(self.duplicate_context)
+                            context.setStyleSheet(context_section_style)
                             context.set_data(context_data)
                             self.contexts.append(context)
                             self.context_layout.addWidget(context)
@@ -500,11 +892,20 @@ class PromptDeck(QMainWindow):
                         geometry.get("width", 500),
                         geometry.get("height", 600)
                     )
+                    
+                # Update char count
+                QTimer.singleShot(500, self.update_total_char_count)
+                
+                # Update status
+                self.status_bar.showMessage("State loaded", 3000)
             except Exception as e:
                 print(f"Error loading state: {e}")
+                self.status_bar.showMessage(f"Error loading state: {e}", 3000)
                 QMessageBox.warning(self, "Warning", f"Failed to load previous state: {e}")
 
     def save_state(self):
+        self.status_bar.showMessage("Saving state...")
+        
         state_dir = Path(user_data_dir("PromptDeck"))
         state_dir.mkdir(parents=True, exist_ok=True)
         state_file = state_dir / "state.json"
@@ -526,14 +927,24 @@ class PromptDeck(QMainWindow):
             else:
                 # Unix-like platforms
                 temp_file.replace(state_file)
+                
+            # Update status
+            self.status_bar.showMessage("State saved", 3000)
+            self.show_toast("Settings saved")
         except Exception as e:
             print(f"Error saving state: {e}")
+            self.status_bar.showMessage(f"Error saving state: {e}", 3000)
             if temp_file.exists():
                 try:
                     temp_file.unlink()  # Clean up temp file
                 except:
                     pass
 
+    def show_toast(self, message, duration=2000):
+        """Show a toast notification with message"""
+        toast = ToastNotification(self, message, duration)
+        toast.show()
+        
     #
     # Drag and Drop implementation for the entire window
     #
@@ -658,6 +1069,42 @@ class PromptDeck(QMainWindow):
         except Exception as e:
             print(f"Error in closeEvent: {e}")
         event.accept()
+
+    def contextMenuEvent(self, event):
+        """Custom context menu for additional actions"""
+        try:
+            # Create custom context menu
+            menu = QMenu(self)
+            
+            # Add actions based on where the menu was invoked
+            add_context_action = QAction("Add Context", self)
+            add_context_action.triggered.connect(self.add_context)
+            menu.addAction(add_context_action)
+            
+            add_file_action = QAction("Add File Context", self)
+            add_file_action.triggered.connect(self.add_file_context)
+            menu.addAction(add_file_action)
+            
+            menu.addSeparator()
+            
+            copy_action = QAction("Copy to Clipboard", self)
+            copy_action.triggered.connect(self.copy_to_clipboard)
+            menu.addAction(copy_action)
+            
+            preview_action = QAction("Preview Formatted Text", self)
+            preview_action.triggered.connect(self.preview_formatted_text)
+            menu.addAction(preview_action)
+            
+            menu.addSeparator()
+            
+            save_action = QAction("Save", self)
+            save_action.triggered.connect(self.save_state)
+            menu.addAction(save_action)
+            
+            # Show the menu
+            menu.exec(event.globalPos())
+        except Exception as e:
+            print(f"Error showing context menu: {e}")
 
 
 def main() -> None:
