@@ -70,6 +70,10 @@ class ContextInput(QWidget):
         self.name_input.setStyleSheet(name_input_style)
         layout.addWidget(self.name_input)
 
+        # Create a horizontal layout for content + buttons
+        content_buttons_layout = QHBoxLayout()
+        content_buttons_layout.setSpacing(5)
+        
         # Content input / text area
         self.content_input = QTextEdit()
         self.content_input.setFixedHeight(150)  # Increased from 80 to 150
@@ -78,39 +82,39 @@ class ContextInput(QWidget):
         self.content_input.textChanged.connect(self.update_char_count)
         modified_content_style = content_input_style + "padding-right: 5px;"
         self.content_input.setStyleSheet(modified_content_style)
-        layout.addWidget(self.content_input)
-
-        # Bottom row (unchanged)
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(5)
-
-        # Character count label
-        self.char_count_label = QLabel("Characters: 0")
-        self.char_count_label.setFont(QFont(FONT_FAMILY, 8))
-        self.char_count_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
-        bottom_row.addWidget(self.char_count_label)
-
-        bottom_row.addStretch()
-
+        content_buttons_layout.addWidget(self.content_input, 1)  # Give it stretch priority
+        
+        # Add buttons in a vertical layout on the right
+        buttons_layout = QVBoxLayout()
+        buttons_layout.setSpacing(5)
+        
         # "Add File" button
         self.file_button = QPushButton("Add File")
         self.file_button.setFixedWidth(80)
         self.file_button.setFont(QFont(FONT_FAMILY, 9))
         self.file_button.clicked.connect(self.on_add_file_clicked)
-        # You can reuse or alter any style you prefer
         self.file_button.setStyleSheet(add_context_btn_style)
-        bottom_row.addWidget(self.file_button)
-
+        buttons_layout.addWidget(self.file_button)
+        
         # Delete button
         self.delete_button = QPushButton("Remove")
         self.delete_button.setFixedWidth(80)
         self.delete_button.setFont(QFont(FONT_FAMILY, 9))
-        # on_delete is now called from parent via callback in prompt_deck.py
         self.delete_button.clicked.connect(self.on_delete)
         self.delete_button.setStyleSheet(delete_button_style)
-        bottom_row.addWidget(self.delete_button)
+        buttons_layout.addWidget(self.delete_button)
+        
+        # Add filler to push buttons to the top
+        buttons_layout.addStretch()
+        
+        content_buttons_layout.addLayout(buttons_layout)
+        layout.addLayout(content_buttons_layout)
 
-        layout.addLayout(bottom_row)
+        # Character count label at the bottom
+        self.char_count_label = QLabel("Characters: 0")
+        self.char_count_label.setFont(QFont(FONT_FAMILY, 8))
+        self.char_count_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        layout.addWidget(self.char_count_label)
 
     #
     # File logic
@@ -271,13 +275,15 @@ class ContextInput(QWidget):
 
             return {
                 "name": notes,      # "Context Notes"
-                "content": content  # Possibly file-based
+                "content": content, # Possibly file-based
+                "is_file": False    # Regular context type
             }
         except Exception as e:
             print(f"Error getting data: {e}")
             return {
                 "name": "Error",
-                "content": f"Error retrieving content: {e}"
+                "content": f"Error retrieving content: {e}",
+                "is_file": False
             }
 
     def set_data(self, data: Dict[str, str]):
@@ -304,3 +310,218 @@ class ContextInput(QWidget):
             print(f"Error setting data: {e}")
             self.name_input.setText("Error")
             self.content_input.setText(f"Error loading content: {e}")
+
+class FileContextInput(QWidget):
+    """A special context input type for files that lazy-loads content when needed"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Track file path and name
+        self.file_path = None
+        self.file_name = None
+        # Unique ID for this context
+        self.id = id(self)
+        # File loading thread
+        self.file_thread = None
+        # Character count
+        self.char_count = 0
+        
+        self.setup_ui()
+        # Enable drag-and-drop
+        self.setAcceptDrops(True)
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 10, 2)
+        layout.setSpacing(2)
+
+        # Notes input (set to filename by default)
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("File Name")
+        self.name_input.setFont(QFont(FONT_FAMILY, 10))
+        self.name_input.setStyleSheet(name_input_style)
+        layout.addWidget(self.name_input)
+
+        # File info layout (horizontal)
+        file_info_layout = QHBoxLayout()
+        file_info_layout.setSpacing(5)
+        
+        # File status label
+        self.file_label = QLabel("No file selected")
+        self.file_label.setFont(QFont(FONT_FAMILY, 9))
+        self.file_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        file_info_layout.addWidget(self.file_label, 1)  # Give stretch priority
+        
+        # Character count label (hidden until file is loaded)
+        self.char_count_label = QLabel("Characters: -")
+        self.char_count_label.setFont(QFont(FONT_FAMILY, 8))
+        self.char_count_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        self.char_count_label.setVisible(False)  # Initially hidden
+        file_info_layout.addWidget(self.char_count_label)
+        
+        # Add buttons in a vertical layout on the right
+        buttons_layout = QVBoxLayout()
+        buttons_layout.setSpacing(5)
+        
+        # "Change File" button
+        self.file_button = QPushButton("Change File")
+        self.file_button.setFixedWidth(80)
+        self.file_button.setFont(QFont(FONT_FAMILY, 9))
+        self.file_button.clicked.connect(self.on_add_file_clicked)
+        self.file_button.setStyleSheet(add_context_btn_style)
+        buttons_layout.addWidget(self.file_button)
+        
+        # Delete button
+        self.delete_button = QPushButton("Remove")
+        self.delete_button.setFixedWidth(80)
+        self.delete_button.setFont(QFont(FONT_FAMILY, 9))
+        self.delete_button.clicked.connect(self.on_delete)
+        self.delete_button.setStyleSheet(delete_button_style)
+        buttons_layout.addWidget(self.delete_button)
+        
+        # Add buttons layout to file info
+        file_info_layout.addLayout(buttons_layout)
+        
+        layout.addLayout(file_info_layout)
+
+    def on_add_file_clicked(self):
+        """Open a file dialog to select a file"""
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getOpenFileName(self, "Select a File", "", "All Files (*)")
+            if path:
+                self.set_file_path(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open file dialog: {e}")
+
+    def set_file_path(self, filepath: str):
+        """Set the file path and update UI elements"""
+        try:
+            path_obj = Path(filepath)
+            
+            # Skip URL-like paths
+            if any(proto in str(path_obj) for proto in ['http:', 'https:', 'ftp:', 'file:']):
+                print(f"Skipping URL-like path: {filepath}")
+                return False
+                
+            # Verify the file exists
+            if not path_obj.exists():
+                print(f"File does not exist: {filepath}")
+                QMessageBox.warning(self, "Warning", f"File does not exist: {filepath}")
+                return False
+            
+            # Store file info
+            self.file_path = filepath
+            self.file_name = path_obj.name
+            
+            # Update UI
+            self.name_input.setText(self.file_name)
+            self.file_label.setText(f"File: {self.file_name}")
+            
+            # Reset char count until file is loaded
+            self.char_count = 0
+            self.char_count_label.setText("Characters: -")
+            self.char_count_label.setVisible(False)
+            
+            return True
+        except Exception as e:
+            print(f"Error setting file path: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to set file: {e}")
+            return False
+
+    def read_latest_content(self):
+        """
+        Read the latest content from the file for use in copy/export
+        Returns a tuple of (content, success)
+        """
+        if not self.file_path:
+            return "", False
+            
+        try:
+            path_obj = Path(self.file_path)
+            
+            # Check if file still exists
+            if not path_obj.exists():
+                QMessageBox.warning(self, "Warning", f"File no longer exists: {self.file_path}")
+                return "", False
+                
+            # Read the file (with size limit)
+            if path_obj.stat().st_size > 5 * 1024 * 1024:  # 5MB limit
+                with path_obj.open(encoding="utf-8", errors="replace") as f:
+                    content = f.read(1024 * 1024)  # First MB
+                    content += "\n\n[File truncated due to size...]"
+            else:
+                try:
+                    content = path_obj.read_text(encoding="utf-8", errors="replace")
+                except UnicodeDecodeError:
+                    # For binary files
+                    content = f"[Binary file: {path_obj.name}]"
+            
+            # Update character count
+            self.char_count = len(content)
+            self.char_count_label.setText(f"Characters: {self.char_count}")
+            self.char_count_label.setVisible(True)
+            
+            # Format content
+            return content, True
+        except Exception as e:
+            print(f"Error reading file: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to read file: {e}")
+            return "", False
+
+    def on_delete(self):
+        """Removes itself from the layout and the main list."""
+        try:
+            # Remove from parent
+            self.setParent(None)
+            self.deleteLater()
+        except Exception as e:
+            print(f"Error in context deletion: {e}")
+
+    def dragEnterEvent(self, event):
+        """Accept file drags, but never let files be dropped directly into contexts."""
+        # We want to prevent files from being dropped directly into existing contexts
+        # Instead, we'll propagate the event up to the main window
+        event.ignore()
+
+    def dropEvent(self, event):
+        """Prevent dropping directly into contexts - pass to parent window."""
+        event.ignore()
+            
+    def dragLeaveEvent(self, event):
+        """Reset styling when drag leaves."""
+        # Restore original styling
+        self.setStyleSheet("")
+        super().dragLeaveEvent(event)
+
+    def get_data(self) -> Dict[str, str]:
+        """Return the context data structure with file path info"""
+        try:
+            return {
+                "name": self.name_input.text(),
+                "file_path": str(self.file_path) if self.file_path else "",
+                "is_file": True  # Flag to identify file context type
+            }
+        except Exception as e:
+            print(f"Error getting data: {e}")
+            return {
+                "name": "Error",
+                "file_path": "",
+                "is_file": True
+            }
+
+    def set_data(self, data: Dict[str, str]):
+        """Load previously saved file context"""
+        try:
+            notes = str(data.get("name", "")) if data.get("name") is not None else ""
+            file_path = str(data.get("file_path", "")) if data.get("file_path") is not None else ""
+            
+            self.name_input.setText(notes)
+            
+            if file_path:
+                self.set_file_path(file_path)
+        except Exception as e:
+            print(f"Error setting file context data: {e}")
+            self.name_input.setText("Error")
+            self.file_label.setText(f"Error loading file context: {e}")

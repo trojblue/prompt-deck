@@ -1,7 +1,7 @@
 import sys
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Union
 import webbrowser
 
 from appdirs import user_data_dir
@@ -9,7 +9,8 @@ from appdirs import user_data_dir
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QTextEdit, QLineEdit, QPushButton,
-    QLabel, QScrollArea, QFrame, QSizePolicy, QMessageBox
+    QLabel, QScrollArea, QFrame, QSizePolicy, QMessageBox,
+    QSplitter
 )
 from PyQt6.QtCore import (
     Qt, QSize, QTimer
@@ -19,10 +20,11 @@ from PyQt6.QtGui import (
 )
 
 from .styles import FONT_FAMILY
-from .styles import ui_style, add_context_btn_style, copy_btn_style, main_prompt_style, get_llm_button_style
+from .styles import ui_style, add_context_btn_style, copy_btn_style, main_prompt_style
+from .styles import get_llm_button_style, delete_button_style
 
-from .context_input import ContextInput
-from .file_drop_area import FileDropArea  # We'll create this class
+from .context_input import ContextInput, FileContextInput
+from .file_drop_area import FileDropArea
 
 
 class PromptDeck(QMainWindow):
@@ -58,8 +60,14 @@ class PromptDeck(QMainWindow):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(10)
 
-        # Main prompt
-        prompt_layout = QVBoxLayout()
+        # Create a splitter for the main sections
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.setChildrenCollapsible(False)
+        
+        # Top section: Main prompt
+        top_widget = QWidget()
+        prompt_layout = QVBoxLayout(top_widget)
+        prompt_layout.setContentsMargins(0, 0, 0, 0)
         prompt_layout.setSpacing(4)
 
         # Improved label styling
@@ -75,15 +83,15 @@ class PromptDeck(QMainWindow):
         self.main_prompt.setFont(QFont(FONT_FAMILY, 10))
         self.main_prompt.setStyleSheet(main_prompt_style)
         prompt_layout.addWidget(self.main_prompt)
-
-        main_layout.addLayout(prompt_layout)
-
-        # Add a subtle separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        separator.setStyleSheet("background-color: #e8e8e8; margin: 8px 0;")
-        main_layout.addWidget(separator)
+        
+        # Add top widget to splitter
+        self.splitter.addWidget(top_widget)
+        
+        # Bottom section: Context
+        bottom_widget = QWidget()
+        context_container_layout = QVBoxLayout(bottom_widget)
+        context_container_layout.setContentsMargins(0, 0, 0, 0)
+        context_container_layout.setSpacing(10)
 
         # Contexts row
         context_section = QHBoxLayout()
@@ -93,9 +101,23 @@ class PromptDeck(QMainWindow):
         context_section.addWidget(context_label)
         context_section.addStretch()
 
-        # Removed file drop area - entire window will be a drop area instead
+        # Clear All button
+        clear_all_btn = QPushButton("Clear All")
+        clear_all_btn.setFixedWidth(80)
+        clear_all_btn.setFont(QFont(FONT_FAMILY, 9))
+        clear_all_btn.clicked.connect(self.clear_all_contexts)
+        clear_all_btn.setStyleSheet(delete_button_style)
+        context_section.addWidget(clear_all_btn)
 
-        # Improved button styling
+        # File context button
+        add_file_context_btn = QPushButton("Add File")
+        add_file_context_btn.setFixedWidth(80)
+        add_file_context_btn.setFont(QFont(FONT_FAMILY, 9))
+        add_file_context_btn.clicked.connect(self.add_file_context)
+        add_file_context_btn.setStyleSheet(add_context_btn_style)
+        context_section.addWidget(add_file_context_btn)
+
+        # Add Context button
         add_context_btn = QPushButton("Add Context")
         add_context_btn.setFixedWidth(100)
         add_context_btn.setFont(QFont(FONT_FAMILY, 9))
@@ -103,7 +125,7 @@ class PromptDeck(QMainWindow):
         add_context_btn.setStyleSheet(add_context_btn_style)
         context_section.addWidget(add_context_btn)
 
-        main_layout.addLayout(context_section)
+        context_container_layout.addLayout(context_section)
 
         # Scroll area
         self.scroll = QScrollArea()
@@ -127,13 +149,19 @@ class PromptDeck(QMainWindow):
         self.context_layout.addWidget(self.placeholder)
 
         self.scroll.setWidget(self.context_container)
-        main_layout.addWidget(self.scroll)
+        context_container_layout.addWidget(self.scroll)
+        
+        # Add bottom widget to splitter
+        self.splitter.addWidget(bottom_widget)
+        
+        # Set initial sizes for splitter sections (40% top, 60% bottom)
+        self.splitter.setSizes([200, 300])
+        
+        # Add splitter to main layout
+        main_layout.addWidget(self.splitter)
 
         # Keep track of contexts
         self.contexts = []
-
-        # Don't add default context - just show placeholder
-        # self.add_context()
 
         # Add a separator before buttons
         separator2 = QFrame()
@@ -157,7 +185,7 @@ class PromptDeck(QMainWindow):
         self.llm_sites = {
             "ChatGPT": ("https://chat.openai.com", "#34495e"),  # Dark slate
             "Claude":  ("https://claude.ai", "#ec6b2d"),        # Claude orange
-            "Grok":    ("https://x.com/i/grok", "#333333")         # Dark gray (not pure black)
+            "Grok":    ("https://x.com/i/grok", "#333333")      # Dark gray (not pure black)
         }
 
         for name, (url, color) in self.llm_sites.items():
@@ -174,6 +202,7 @@ class PromptDeck(QMainWindow):
         self.resize(520, 600)
 
     def add_context(self):
+        """Add a regular text context input"""
         # Check if placeholder exists and remove it
         if hasattr(self, 'placeholder') and self.placeholder is not None:
             self.placeholder.setVisible(False)
@@ -186,6 +215,53 @@ class PromptDeck(QMainWindow):
         self.contexts.append(context)
         self.context_layout.addWidget(context)
         return context
+
+    def add_file_context(self):
+        """Add a file context input that uses lazy loading"""
+        # Check if placeholder exists and remove it
+        if hasattr(self, 'placeholder') and self.placeholder is not None:
+            self.placeholder.setVisible(False)
+            self.placeholder = None
+            
+        # Create the file context input
+        file_context = FileContextInput()
+        file_context.id = id(file_context)
+        file_context.delete_button.clicked.connect(self.on_delete_context)
+        
+        # Add to context list and layout
+        self.contexts.append(file_context)
+        self.context_layout.addWidget(file_context)
+        
+        # Open file dialog immediately
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getOpenFileName(self, "Select a File", "", "All Files (*)")
+            if path:
+                file_context.set_file_path(path)
+            else:
+                # If no file selected, remove the context
+                self.remove_context(file_context)
+                return None
+        except Exception as e:
+            print(f"Error opening file dialog: {e}")
+        
+        return file_context
+
+    def clear_all_contexts(self):
+        """Remove all contexts"""
+        try:
+            # Ask for confirmation
+            reply = QMessageBox.question(
+                self, "Confirm", "Remove all context sections?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # Disconnect signals and remove widgets
+                for context in list(self.contexts):
+                    self.remove_context(context)
+        except Exception as e:
+            print(f"Error clearing contexts: {e}")
 
     def on_delete_context(self):
         """Handles delete button clicks from context objects"""
@@ -202,8 +278,7 @@ class PromptDeck(QMainWindow):
 
     def handle_file_drop(self, filepath):
         """
-        Create a new context and load the file into it.
-        Now handles filepath validation before creating context.
+        Create a new file context and set the file path.
         """
         from pathlib import Path
         
@@ -221,9 +296,22 @@ class PromptDeck(QMainWindow):
                 print(f"File does not exist: {filepath}")
                 return
                 
-            # Now create the context and load the file
-            context = self.add_context()
-            context.load_file(filepath)
+            # Now create a file context and set the path
+            file_context = FileContextInput()
+            file_context.id = id(file_context)
+            file_context.delete_button.clicked.connect(self.on_delete_context)
+            
+            # Check if placeholder exists and remove it
+            if hasattr(self, 'placeholder') and self.placeholder is not None:
+                self.placeholder.setVisible(False)
+                self.placeholder = None
+                
+            # Add to context list and layout
+            self.contexts.append(file_context)
+            self.context_layout.addWidget(file_context)
+            
+            # Set the file path
+            file_context.set_file_path(filepath)
         except Exception as e:
             print(f"Error handling file drop: {e}")
             # Show error message to user
@@ -234,7 +322,7 @@ class PromptDeck(QMainWindow):
             # Disconnect signals first to prevent callbacks on deleted objects
             try:
                 context.delete_button.clicked.disconnect()
-                if hasattr(context, 'content_input'):
+                if hasattr(context, 'content_input') and hasattr(context.content_input, 'textChanged'):
                     context.content_input.textChanged.disconnect()
                 
                 # Cancel any running file threads
@@ -256,11 +344,23 @@ class PromptDeck(QMainWindow):
 
     def copy_to_clipboard(self):
         try:
+            # Load latest file content before copying
+            self.reload_file_contents()
+            
             formatted_text = self.get_formatted_text()
             clipboard = QApplication.clipboard()
             clipboard.setText(formatted_text)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to copy to clipboard: {e}")
+
+    def reload_file_contents(self):
+        """Reload the latest content from all file contexts"""
+        try:
+            for context in self.contexts:
+                if isinstance(context, FileContextInput) and hasattr(context, 'read_latest_content'):
+                    context.read_latest_content()
+        except Exception as e:
+            print(f"Error reloading file contents: {e}")
 
     def launch_site(self, url: str):
         try:
@@ -273,18 +373,32 @@ class PromptDeck(QMainWindow):
         parts = [self.main_prompt.toPlainText(), ""]
 
         try:
+            # Process only contexts that are still in the UI and have content
             valid_contexts = [
                 c for c in self.contexts
-                if c.parent() is not None and
-                (c.get_data()["name"] or c.get_data()["content"])
+                if c.parent() is not None
             ]
+            
             for context in valid_contexts:
                 data = context.get_data()
-                parts.extend([
-                    f"{data['name']}:",
-                    data["content"],
-                    ""
-                ])
+                
+                if isinstance(context, FileContextInput):
+                    # For file contexts, get the most recent content
+                    content, success = context.read_latest_content()
+                    if success:
+                        parts.extend([
+                            f"{data['name']}:",
+                            content,
+                            ""
+                        ])
+                else:
+                    # Regular context - check if it has content
+                    if data.get("name") or data.get("content"):
+                        parts.extend([
+                            f"{data['name']}:",
+                            data["content"],
+                            ""
+                        ])
         except Exception as e:
             print(f"Error formatting text: {e}")
             parts.append(f"[Error formatting context data: {e}]")
@@ -293,13 +407,18 @@ class PromptDeck(QMainWindow):
 
     def get_state(self) -> Dict:
         try:
-            valid_contexts = [
-                c for c in self.contexts
-                if c.parent() is not None
-            ]
+            # Get splitter sizes for proportions
+            splitter_sizes = self.splitter.sizes()
+            
+            valid_contexts = []
+            for c in self.contexts:
+                if c.parent() is not None:
+                    valid_contexts.append(c.get_data())
+            
             return {
                 "main_prompt": self.main_prompt.toPlainText(),
-                "contexts": [c.get_data() for c in valid_contexts],
+                "contexts": valid_contexts,
+                "splitter_sizes": splitter_sizes,
                 "geometry": {
                     "x": self.x(),
                     "y": self.y(),
@@ -313,6 +432,7 @@ class PromptDeck(QMainWindow):
             return {
                 "main_prompt": "",
                 "contexts": [],
+                "splitter_sizes": [200, 300],
                 "geometry": {
                     "x": 100,
                     "y": 100,
@@ -339,16 +459,31 @@ class PromptDeck(QMainWindow):
                     c.setParent(None)
                 self.contexts.clear()
 
+                # Restore splitter sizes if available
+                splitter_sizes = state.get("splitter_sizes", [200, 300])
+                self.splitter.setSizes(splitter_sizes)
+
                 # Load from file
                 contexts_data = state.get("contexts", [])
                 if contexts_data:
                     for context_data in contexts_data:
-                        context = ContextInput()
-                        context.set_data(context_data)
-                        context.id = id(context)
-                        context.delete_button.clicked.connect(self.on_delete_context)
-                        self.contexts.append(context)
-                        self.context_layout.addWidget(context)
+                        # Check if it's a file context
+                        if context_data.get("is_file", False):
+                            # Create file context
+                            file_context = FileContextInput()
+                            file_context.id = id(file_context)
+                            file_context.delete_button.clicked.connect(self.on_delete_context)
+                            file_context.set_data(context_data)
+                            self.contexts.append(file_context)
+                            self.context_layout.addWidget(file_context)
+                        else:
+                            # Regular context
+                            context = ContextInput()
+                            context.id = id(context)
+                            context.delete_button.clicked.connect(self.on_delete_context)
+                            context.set_data(context_data)
+                            self.contexts.append(context)
+                            self.context_layout.addWidget(context)
                 else:
                     # If no contexts in saved state, show placeholder
                     if not hasattr(self, 'placeholder') or self.placeholder is None:
@@ -468,7 +603,7 @@ class PromptDeck(QMainWindow):
     def dropEvent(self, event):
         """
         Improved drop event that handles multiple files and validates file paths.
-        Each valid file will create a new context.
+        Each valid file will create a new file context.
         """
         try:
             urls = event.mimeData().urls()
