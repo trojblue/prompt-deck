@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTextEdit, 
-                             QPushButton, QLabel, QMessageBox, QSizePolicy, QFrame)
-from PyQt6.QtGui import QFont, QTextCursor, QIcon, QColor
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QMimeData
+                             QPushButton, QLabel, QMessageBox, QSizePolicy, QFrame, QApplication)
+from PyQt6.QtGui import QFont, QTextCursor, QIcon, QColor, QDrag
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QMimeData, QTimer
 from .styles import FONT_FAMILY, name_input_style, content_input_style
 
 from typing import Dict, Optional
@@ -43,7 +43,7 @@ class FileReaderThread(QThread):
             self.file_read.emit(self.path, file_text)
         except Exception as e:
             self.error_occurred.emit(self.path, str(e))
-
+            
 # Drag handle widget for context reordering
 class DragHandle(QFrame):
     def __init__(self, parent=None):
@@ -105,14 +105,18 @@ class BaseContextInput(QWidget):
 
     def mouseMoveEvent(self, event):
         """Initiate drag if mouse moves with button pressed over handle"""
-        if (not self.drag_start_position or 
+        if (not hasattr(self, 'drag_start_position') or 
+            not self.drag_start_position or 
             not event.buttons() & Qt.MouseButton.LeftButton or 
             not self.drag_handle.geometry().contains(self.drag_start_position)):
             super().mouseMoveEvent(event)
             return
+        
+        # Get start drag distance from application
+        start_drag_distance = QApplication.startDragDistance()
             
         # Start dragging if moved far enough
-        if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+        if (event.pos() - self.drag_start_position).manhattanLength() < start_drag_distance:
             super().mouseMoveEvent(event)
             return
             
@@ -151,7 +155,8 @@ class BaseContextInput(QWidget):
         if event.mimeData().hasFormat("application/x-contextwidget"):
             source_id = int(event.mimeData().data("application/x-contextwidget").data().decode())
             # Signal to parent that a reorder is requested
-            self.parent().reorder_contexts(source_id, self.id)
+            if hasattr(self.parent(), 'reorder_contexts'):
+                self.parent().reorder_contexts(source_id, self.id)
             self.setStyleSheet("")
             event.acceptProposedAction()
         else:
@@ -169,7 +174,7 @@ class BaseContextInput(QWidget):
         # Duplicate button
         self.duplicate_button = QPushButton()
         self.duplicate_button.setIcon(QIcon.fromTheme("edit-copy", 
-                                  QIcon(QApplication.style().standardIcon(QApplication.style().StandardPixmap.SP_FileCopyIcon))))
+                                  QIcon(QApplication.style().standardIcon(QApplication.style().StandardPixmap.SP_FileIcon))))
         self.duplicate_button.setToolTip("Duplicate")
         self.duplicate_button.setFixedSize(24, 24)
         self.duplicate_button.clicked.connect(self.duplicate)
@@ -187,86 +192,113 @@ class BaseContextInput(QWidget):
         
         return buttons_layout
 
-class ContextInput(BaseContextInput):
+class ContextInput(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
         # Track if we have a file loaded
         self.file_name = None
+        # Unique ID for this context (used for callbacks)
+        self.id = id(self)
         # File loading thread
         self.file_thread = None
+        # Add a status timer attribute to track active status timers
+        self.status_timer = None
         
         self.setup_ui()
 
-    def setup_ui(self):
-        # Header row with notes and buttons
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(5)
+        # Enable drag-and-drop on this widget
+        self.setAcceptDrops(True)
 
-        # "Notes" input 
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 10, 2)  # Added 10px right margin
+        layout.setSpacing(2)
+
+        # "Notes" input (was "Context Name")
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Context Notes")
         self.name_input.setFont(QFont(FONT_FAMILY, 10))
         self.name_input.setStyleSheet(name_input_style)
-        header_layout.addWidget(self.name_input, 1)  # Give stretch priority
-        
-        # Add header buttons
-        buttons_layout = self.create_header_buttons()
-        
-        # "Add File" button
-        self.file_button = QPushButton()
-        self.file_button.setIcon(QIcon.fromTheme("document-open", 
-                               QIcon(QApplication.style().standardIcon(QApplication.style().StandardPixmap.SP_FileIcon))))
-        self.file_button.setToolTip("Add File")
-        self.file_button.setFixedSize(24, 24)
-        self.file_button.clicked.connect(self.on_add_file_clicked)
-        self.file_button.setStyleSheet(duplicate_button_style)
-        buttons_layout.addWidget(self.file_button)
-        
-        header_layout.addLayout(buttons_layout)
-        self.content_layout.addLayout(header_layout)
+        layout.addWidget(self.name_input)
 
-        # Create a horizontal layout for content + buttons
-        content_buttons_layout = QHBoxLayout()
-        content_buttons_layout.setSpacing(5)
-        
         # Content input / text area
         self.content_input = QTextEdit()
-        self.content_input.setFixedHeight(120)  # Reduced height for compactness
+        self.content_input.setFixedHeight(150)  # Increased from 80 to 150
         self.content_input.setPlaceholderText("Content")
         self.content_input.setFont(QFont(FONT_FAMILY, 10))
         self.content_input.textChanged.connect(self.update_char_count)
         modified_content_style = content_input_style + "padding-right: 5px;"
         self.content_input.setStyleSheet(modified_content_style)
-        content_buttons_layout.addWidget(self.content_input, 1)  # Give it stretch priority
-        
-        self.content_layout.addLayout(content_buttons_layout)
+        layout.addWidget(self.content_input)
 
-        # Status bar with character count
-        status_layout = QHBoxLayout()
-        status_layout.setContentsMargins(2, 2, 2, 2)
-        
+        # Bottom row (unchanged)
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(5)
+
         # Character count label
         self.char_count_label = QLabel("Characters: 0")
         self.char_count_label.setFont(QFont(FONT_FAMILY, 8))
         self.char_count_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
-        status_layout.addWidget(self.char_count_label)
+        bottom_row.addWidget(self.char_count_label)
         
-        status_layout.addStretch()
-        
-        # Status indicator (for file operations)
+        # Status indicator - this is the widget that's causing problems
         self.status_indicator = QLabel("")
         self.status_indicator.setFont(QFont(FONT_FAMILY, 8))
-        status_layout.addWidget(self.status_indicator)
-        
-        self.content_layout.addLayout(status_layout)
-        
-        # Add a separator line at the bottom
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        separator.setStyleSheet("background-color: #e8e8e8; margin: 4px 0;")
-        self.content_layout.addWidget(separator)
+        self.status_indicator.setStyleSheet("color: #27ae60; font-style: italic;")
+        bottom_row.addWidget(self.status_indicator)
+
+        bottom_row.addStretch()
+
+        # "Add File" button
+        self.file_button = QPushButton("Add File")
+        self.file_button.setFixedWidth(80)
+        self.file_button.setFont(QFont(FONT_FAMILY, 9))
+        self.file_button.clicked.connect(self.on_add_file_clicked)
+        # You can reuse or alter any style you prefer
+        self.file_button.setStyleSheet(add_context_btn_style)
+        bottom_row.addWidget(self.file_button)
+
+        # Delete button
+        self.delete_button = QPushButton("Remove")
+        self.delete_button.setFixedWidth(80)
+        self.delete_button.setFont(QFont(FONT_FAMILY, 9))
+        # on_delete is now called from parent via callback in prompt_deck.py
+        self.delete_button.clicked.connect(self.on_delete)
+        self.delete_button.setStyleSheet(delete_button_style)
+        bottom_row.addWidget(self.delete_button)
+
+        layout.addLayout(bottom_row)
+
+    # New method to safely set status with a timer
+    def set_status(self, text, duration=3000):
+        """Safely set status text and clear it after duration."""
+        try:
+            if hasattr(self, 'status_indicator') and self.status_indicator is not None:
+                self.status_indicator.setText(text)
+                
+                # Cancel any existing timer
+                if self.status_timer is not None:
+                    self.status_timer.stop()
+                    self.status_timer = None
+                
+                # Create a new timer that clears the text
+                if duration > 0:
+                    self.status_timer = QTimer()
+                    self.status_timer.setSingleShot(True)
+                    self.status_timer.timeout.connect(self.clear_status)
+                    self.status_timer.start(duration)
+        except Exception as e:
+            print(f"Error setting status: {e}")
+    
+    # New method to safely clear status
+    def clear_status(self):
+        """Safely clear the status indicator."""
+        try:
+            if hasattr(self, 'status_indicator') and self.status_indicator is not None and not self.status_indicator.isHidden():
+                self.status_indicator.setText("")
+        except Exception as e:
+            print(f"Error clearing status: {e}")
 
     #
     # File logic
@@ -302,8 +334,8 @@ class ContextInput(BaseContextInput):
             
             # Set loading indicator
             self.content_input.setPlainText("Loading file...")
-            self.status_indicator.setText("Loading...")
-            self.status_indicator.setStyleSheet("color: #3498db;")
+            # Use our new safe status method instead of direct timers
+            self.set_status("Loading file...")
             
             # Start file reading in background thread
             self.file_thread = FileReaderThread(filepath)
@@ -325,32 +357,49 @@ class ContextInput(BaseContextInput):
             self.name_input.setText(self.file_name)
             self.content_input.setPlainText(content)
             self.update_char_count()
-            
-            # Show success indicator for 3 seconds
-            self.status_indicator.setText("File loaded")
-            self.status_indicator.setStyleSheet("color: #27ae60;")
-            QTimer.singleShot(3000, lambda: self.status_indicator.setText(""))
+            # Use our new safe status method instead of direct timers
+            self.set_status("File loaded successfully!", 3000)
         except Exception as e:
             print(f"Error processing file content: {e}")
             self.content_input.setPlainText(f"Error processing file: {e}")
-            
-            # Show error indicator
-            self.status_indicator.setText("Error")
-            self.status_indicator.setStyleSheet("color: #e74c3c;")
     
     def on_file_error(self, path, error_msg):
         """Handle file read error"""
         self.content_input.setPlainText("")
-        
-        # Show error indicator
-        self.status_indicator.setText("Error")
-        self.status_indicator.setStyleSheet("color: #e74c3c;")
-        
+        # Use our new safe status method
+        self.set_status(f"Error: {error_msg}", 5000)
         QMessageBox.critical(self, "Error", f"Error reading file: {error_msg}")
 
+    #
+    # Drag-and-drop overrides
+    #
+    def dragEnterEvent(self, event):
+        """Accept file drags, but never let files be dropped directly into contexts."""
+        # We want to prevent files from being dropped directly into existing contexts
+        # Instead, we'll propagate the event up to the main window
+        event.ignore()
+
+    def dropEvent(self, event):
+        """Prevent dropping directly into contexts - pass to parent window."""
+        event.ignore()
+            
+    def dragLeaveEvent(self, event):
+        """Reset styling when drag leaves."""
+        # Restore original styling
+        self.setStyleSheet("")
+        super().dragLeaveEvent(event)
+        
+    #
+    # Existing methods
+    #
     def on_delete(self):
         """Removes itself from the layout and the main list."""
         try:
+            # Cancel any pending status timers first
+            if hasattr(self, 'status_timer') and self.status_timer is not None:
+                self.status_timer.stop()
+                self.status_timer = None
+                
             # Cancel any file loading thread that might be running
             if self.file_thread and self.file_thread.isRunning():
                 self.file_thread.terminate()
@@ -422,15 +471,13 @@ class ContextInput(BaseContextInput):
 
             return {
                 "name": notes,      # "Context Notes"
-                "content": content, # Possibly file-based
-                "is_file": False    # Regular context type
+                "content": content  # Possibly file-based
             }
         except Exception as e:
             print(f"Error getting data: {e}")
             return {
                 "name": "Error",
-                "content": f"Error retrieving content: {e}",
-                "is_file": False
+                "content": f"Error retrieving content: {e}"
             }
 
     def set_data(self, data: Dict[str, str]):
@@ -457,17 +504,7 @@ class ContextInput(BaseContextInput):
             print(f"Error setting data: {e}")
             self.name_input.setText("Error")
             self.content_input.setText(f"Error loading content: {e}")
-
-    def create_duplicate(self) -> 'ContextInput':
-        """Create a duplicate of this context including content"""
-        dup = ContextInput()
-        
-        # Copy settings
-        dup.name_input.setText(self.name_input.text())
-        dup.content_input.setText(self.content_input.toPlainText())
-        dup.file_name = self.file_name  # Copy file info if present
-        
-        return dup
+            
 
 class FileContextInput(BaseContextInput):
     """A special context input type for files that lazy-loads content when needed"""
@@ -686,7 +723,8 @@ class FileContextInput(BaseContextInput):
         if event.mimeData().hasFormat("application/x-contextwidget"):
             # Process context reordering
             source_id = int(event.mimeData().data("application/x-contextwidget").data().decode())
-            self.parent().reorder_contexts(source_id, self.id)
+            if hasattr(self.parent(), 'reorder_contexts'):
+                self.parent().reorder_contexts(source_id, self.id)
             self.setStyleSheet("")
             event.acceptProposedAction()
         elif event.mimeData().hasUrls() and event.mimeData().urls()[0].isLocalFile():

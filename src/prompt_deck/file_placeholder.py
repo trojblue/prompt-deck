@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
+from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QApplication
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor
 
@@ -33,7 +33,6 @@ class FilePlaceholder(QWidget):
                           
         # If system themes aren't available, try to use Qt's standard icons
         if file_icon.isNull():
-            from PyQt6.QtWidgets import QApplication, QStyle
             file_icon = QIcon(QApplication.style().standardIcon(QApplication.style().StandardPixmap.SP_FileIcon))
         
         pixmap = file_icon.pixmap(QSize(64, 64))  # Larger icon

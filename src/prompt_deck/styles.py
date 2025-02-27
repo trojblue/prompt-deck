@@ -219,7 +219,6 @@ main_prompt_style = """
             QTextEdit:focus {
                 border: 1px solid #6c8baf;
                 background-color: white;
-                box-shadow: 0 0 4px rgba(108, 139, 175, 0.25);
             }
         """
 

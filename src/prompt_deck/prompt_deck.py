@@ -11,15 +11,15 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QTextEdit, QLineEdit, QPushButton,
     QLabel, QScrollArea, QFrame, QSizePolicy, QMessageBox,
-    QSplitter, QStatusBar, QMenu
+    QSplitter, QStatusBar, QMenu, QDialog
 )
-from PyQt6.QtGui import QShortcut
-
 from PyQt6.QtCore import (
     Qt, QSize, QTimer, QPoint, QPropertyAnimation
 )
+
+
 from PyQt6.QtGui import (
-    QFont, QIcon, QColor, QPalette, QKeySequence, QAction
+    QFont, QIcon, QColor, QPalette, QKeySequence, QAction, QShortcut
 )
 
 from .styles import FONT_FAMILY
@@ -29,6 +29,7 @@ from .styles import (ui_style, add_context_btn_style, copy_btn_style, main_promp
 
 from .context_input import ContextInput, FileContextInput
 from .file_drop_area import FileDropArea
+
 
 
 class ToastNotification(QFrame):
