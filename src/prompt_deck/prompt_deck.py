@@ -9,10 +9,10 @@ from appdirs import user_data_dir
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QTextEdit, QLineEdit, QPushButton,
-    QLabel, QScrollArea, QFrame, QSizePolicy
+    QLabel, QScrollArea, QFrame, QSizePolicy, QMessageBox
 )
 from PyQt6.QtCore import (
-    Qt, QSize
+    Qt, QSize, QTimer
 )
 from PyQt6.QtGui import (
     QFont, QIcon, QColor, QPalette
@@ -39,6 +39,9 @@ class PromptDeck(QMainWindow):
         # Variable to track highlight state
         self.is_drag_active = False
         self.original_stylesheet = ""
+        
+        # Store timer for style reset
+        self.style_reset_timer = None
 
         # Setup UI
         self.setup_ui()
@@ -177,12 +180,25 @@ class PromptDeck(QMainWindow):
             self.placeholder = None
             
         context = ContextInput()
-        context.delete_button.clicked.connect(
-            lambda: self.remove_context(context)
-        )
+        # Use a more robust callback approach with unique identifier
+        context.id = id(context)  # Store unique ID
+        context.delete_button.clicked.connect(self.on_delete_context)
         self.contexts.append(context)
         self.context_layout.addWidget(context)
         return context
+
+    def on_delete_context(self):
+        """Handles delete button clicks from context objects"""
+        sender = self.sender()
+        context_to_remove = None
+        
+        for context in self.contexts:
+            if context.delete_button == sender:
+                context_to_remove = context
+                break
+                
+        if context_to_remove:
+            self.remove_context(context_to_remove)
 
     def handle_file_drop(self, filepath):
         """
@@ -191,20 +207,44 @@ class PromptDeck(QMainWindow):
         """
         from pathlib import Path
         
-        # Handle case where an invalid or URL-like path is dropped
-        path_obj = Path(filepath)
-        
-        # Skip if it looks like a URL or invalid path
-        if not path_obj.exists() or "://" in filepath:
-            print(f"Skipping invalid file path: {filepath}")
-            return
+        try:
+            # Handle case where an invalid or URL-like path is dropped
+            path_obj = Path(filepath)
             
-        # Now create the context and load the file
-        context = self.add_context()
-        context.load_file(filepath)
+            # Skip if it looks like a URL or invalid path
+            if any(proto in str(path_obj) for proto in ['http:', 'https:', 'ftp:', 'file:']):
+                print(f"Skipping URL-like path: {filepath}")
+                return
+                
+            # Skip if file doesn't exist
+            if not path_obj.exists():
+                print(f"File does not exist: {filepath}")
+                return
+                
+            # Now create the context and load the file
+            context = self.add_context()
+            context.load_file(filepath)
+        except Exception as e:
+            print(f"Error handling file drop: {e}")
+            # Show error message to user
+            QMessageBox.critical(self, "Error", f"Could not load file: {e}")
 
     def remove_context(self, context):
         if context in self.contexts:
+            # Disconnect signals first to prevent callbacks on deleted objects
+            try:
+                context.delete_button.clicked.disconnect()
+                if hasattr(context, 'content_input'):
+                    context.content_input.textChanged.disconnect()
+                
+                # Cancel any running file threads
+                if hasattr(context, 'file_thread') and hasattr(context.file_thread, 'isRunning') and context.file_thread.isRunning():
+                    context.file_thread.terminate()
+                    context.file_thread.wait()
+            except Exception as e:
+                # Already disconnected or other error
+                print(f"Error disconnecting signals: {e}")
+                
             self.contexts.remove(context)
             
         # If no contexts left, show placeholder again
@@ -215,47 +255,71 @@ class PromptDeck(QMainWindow):
                 self.context_layout.addWidget(self.placeholder)
 
     def copy_to_clipboard(self):
-        formatted_text = self.get_formatted_text()
-        clipboard = QApplication.clipboard()
-        clipboard.setText(formatted_text)
+        try:
+            formatted_text = self.get_formatted_text()
+            clipboard = QApplication.clipboard()
+            clipboard.setText(formatted_text)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to copy to clipboard: {e}")
 
     def launch_site(self, url: str):
-        self.copy_to_clipboard()
-        webbrowser.open(url)
+        try:
+            self.copy_to_clipboard()
+            webbrowser.open(url)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open website: {e}")
 
     def get_formatted_text(self) -> str:
         parts = [self.main_prompt.toPlainText(), ""]
 
-        valid_contexts = [
-            c for c in self.contexts
-            if c.parent() is not None and
-               (c.get_data()["name"] or c.get_data()["content"])
-        ]
-        for context in valid_contexts:
-            data = context.get_data()
-            parts.extend([
-                f"{data['name']}:",
-                data["content"],
-                ""
-            ])
+        try:
+            valid_contexts = [
+                c for c in self.contexts
+                if c.parent() is not None and
+                (c.get_data()["name"] or c.get_data()["content"])
+            ]
+            for context in valid_contexts:
+                data = context.get_data()
+                parts.extend([
+                    f"{data['name']}:",
+                    data["content"],
+                    ""
+                ])
+        except Exception as e:
+            print(f"Error formatting text: {e}")
+            parts.append(f"[Error formatting context data: {e}]")
 
         return "\n".join(parts)
 
     def get_state(self) -> Dict:
-        valid_contexts = [
-            c for c in self.contexts
-            if c.parent() is not None
-        ]
-        return {
-            "main_prompt": self.main_prompt.toPlainText(),
-            "contexts": [c.get_data() for c in valid_contexts],
-            "geometry": {
-                "x": self.x(),
-                "y": self.y(),
-                "width": self.width(),
-                "height": self.height()
+        try:
+            valid_contexts = [
+                c for c in self.contexts
+                if c.parent() is not None
+            ]
+            return {
+                "main_prompt": self.main_prompt.toPlainText(),
+                "contexts": [c.get_data() for c in valid_contexts],
+                "geometry": {
+                    "x": self.x(),
+                    "y": self.y(),
+                    "width": self.width(),
+                    "height": self.height()
+                }
             }
-        }
+        except Exception as e:
+            print(f"Error getting state: {e}")
+            # Return minimal valid state
+            return {
+                "main_prompt": "",
+                "contexts": [],
+                "geometry": {
+                    "x": 100,
+                    "y": 100,
+                    "width": 520,
+                    "height": 600
+                }
+            }
 
     def load_state(self):
         state_file = Path(user_data_dir("PromptDeck")) / "state.json"
@@ -281,9 +345,8 @@ class PromptDeck(QMainWindow):
                     for context_data in contexts_data:
                         context = ContextInput()
                         context.set_data(context_data)
-                        context.delete_button.clicked.connect(
-                            lambda: self.remove_context(context)
-                        )
+                        context.id = id(context)
+                        context.delete_button.clicked.connect(self.on_delete_context)
                         self.contexts.append(context)
                         self.context_layout.addWidget(context)
                 else:
@@ -304,17 +367,37 @@ class PromptDeck(QMainWindow):
                     )
             except Exception as e:
                 print(f"Error loading state: {e}")
+                QMessageBox.warning(self, "Warning", f"Failed to load previous state: {e}")
 
     def save_state(self):
         state_dir = Path(user_data_dir("PromptDeck"))
         state_dir.mkdir(parents=True, exist_ok=True)
         state_file = state_dir / "state.json"
+        temp_file = state_dir / "state.json.tmp"
 
         try:
-            with open(state_file, "w") as f:
+            # Write to temp file first
+            with open(temp_file, "w") as f:
                 json.dump(self.get_state(), f)
+            
+            # Rename temp file to actual file (atomic operation)
+            if sys.platform == 'win32':
+                # Windows needs special handling for replacing files
+                import os
+                if state_file.exists():
+                    os.replace(str(temp_file), str(state_file))
+                else:
+                    temp_file.rename(state_file)
+            else:
+                # Unix-like platforms
+                temp_file.replace(state_file)
         except Exception as e:
             print(f"Error saving state: {e}")
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()  # Clean up temp file
+                except:
+                    pass
 
     #
     # Drag and Drop implementation for the entire window
@@ -324,90 +407,121 @@ class PromptDeck(QMainWindow):
         Accept the drag event if it has URLs (files).
         Now displays correct information for multi-file drop.
         """
-        if event.mimeData().hasUrls():
-            # Count how many valid files we have
-            valid_file_count = sum(1 for url in event.mimeData().urls() if url.isLocalFile())
-            
-            if valid_file_count > 0:
-                event.acceptProposedAction()
+        try:
+            if event.mimeData().hasUrls():
+                # Count how many valid files we have
+                valid_file_count = sum(1 for url in event.mimeData().urls() if url.isLocalFile())
                 
-                # Store original stylesheet if not already stored
-                if not self.is_drag_active:
-                    self.original_stylesheet = self.context_container.styleSheet()
-                    self.is_drag_active = True
-                
-                # Check if placeholder is visible and apply special styling
-                if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
-                    # Update placeholder text to show number of files
-                    if valid_file_count > 1:
-                        self.placeholder.text_label.setText(f"Drop to add {valid_file_count} files")
-                    else:
-                        self.placeholder.text_label.setText("Drop to add file")
+                if valid_file_count > 0:
+                    event.acceptProposedAction()
                     
+                    # Store original stylesheet if not already stored
+                    if not self.is_drag_active:
+                        self.original_stylesheet = self.context_container.styleSheet()
+                        self.is_drag_active = True
+                    
+                    # Check if placeholder is visible and apply special styling
+                    if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                        # Update placeholder text to show number of files
+                        if valid_file_count > 1:
+                            self.placeholder.text_label.setText(f"Drop to add {valid_file_count} files")
+                        else:
+                            self.placeholder.text_label.setText("Drop to add file")
+                        
+                        self.placeholder.setStyleSheet("""
+                            FilePlaceholder {
+                                background-color: rgba(232, 245, 233, 0.7);
+                                border: 2px dashed #4CAF50;
+                                border-radius: 8px;
+                            }
+                        """)
+                    else:
+                        # Regular highlight effect for content container
+                        self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.5); border: 2px dashed #4CAF50; border-radius: 5px;")
+        except Exception as e:
+            print(f"Error in dragEnterEvent: {e}")
+            event.ignore()
+    
+    def dragLeaveEvent(self, event):
+        """Reset styling when drag leaves."""
+        try:
+            if self.is_drag_active:
+                if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                    # Reset placeholder text
+                    self.placeholder.text_label.setText("Add context or drop files here")
                     self.placeholder.setStyleSheet("""
                         FilePlaceholder {
-                            background-color: rgba(232, 245, 233, 0.7);
-                            border: 2px dashed #4CAF50;
+                            background-color: #f8f9fa;
+                            border: 2px dashed #e0e0e0;
                             border-radius: 8px;
                         }
                     """)
                 else:
-                    # Regular highlight effect for content container
-                    self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.5); border: 2px dashed #4CAF50; border-radius: 5px;")
-    
-    def dragLeaveEvent(self, event):
-        """Reset styling when drag leaves."""
-        if self.is_drag_active:
-            if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
-                # Reset placeholder text
-                self.placeholder.text_label.setText("Add context or drop files here")
-                self.placeholder.setStyleSheet("""
-                    FilePlaceholder {
-                        background-color: #f8f9fa;
-                        border: 2px dashed #e0e0e0;
-                        border-radius: 8px;
-                    }
-                """)
-            else:
-                self.context_container.setStyleSheet("background-color: #fafafa;")
+                    self.context_container.setStyleSheet("background-color: #fafafa;")
+                self.is_drag_active = False
+        except Exception as e:
+            print(f"Error in dragLeaveEvent: {e}")
+            # Try to reset to a safe state
+            self.context_container.setStyleSheet("background-color: #fafafa;")
             self.is_drag_active = False
-
 
     def dropEvent(self, event):
         """
         Improved drop event that handles multiple files and validates file paths.
         Each valid file will create a new context.
         """
-        urls = event.mimeData().urls()
-        if urls:
-            # Temporarily flash the confirmation style
-            if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
-                self.placeholder.setStyleSheet("""
-                    FilePlaceholder {
-                        background-color: rgba(232, 245, 233, 0.8);
-                        border: 2px solid #4CAF50;
-                        border-radius: 8px;
-                    }
-                """)
-            else:
-                self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.8); border: 2px solid #4CAF50; border-radius: 5px;")
-            
-            # Process all valid local files in the drop event
-            for url in urls:
-                if url.isLocalFile():
-                    filepath = url.toLocalFile()
-                    self.handle_file_drop(filepath)
-            
-            # Reset after a short delay
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(500, lambda: self.context_container.setStyleSheet("background-color: #fafafa;"))
+        try:
+            urls = event.mimeData().urls()
+            if urls:
+                # Temporarily flash the confirmation style
+                if hasattr(self, 'placeholder') and self.placeholder and self.placeholder.isVisible():
+                    self.placeholder.setStyleSheet("""
+                        FilePlaceholder {
+                            background-color: rgba(232, 245, 233, 0.8);
+                            border: 2px solid #4CAF50;
+                            border-radius: 8px;
+                        }
+                    """)
+                else:
+                    self.context_container.setStyleSheet("background-color: rgba(232, 245, 233, 0.8); border: 2px solid #4CAF50; border-radius: 5px;")
+                
+                # Process all valid local files in the drop event
+                for url in urls:
+                    if url.isLocalFile():
+                        filepath = url.toLocalFile()
+                        self.handle_file_drop(filepath)
+                
+                # Reset after a short delay using managed timer
+                if hasattr(self, 'style_reset_timer') and self.style_reset_timer is not None and self.style_reset_timer.isActive():
+                    self.style_reset_timer.stop()
+                
+                self.style_reset_timer = QTimer()
+                self.style_reset_timer.setSingleShot(True)
+                self.style_reset_timer.timeout.connect(lambda: self.context_container.setStyleSheet("background-color: #fafafa;"))
+                self.style_reset_timer.start(500)
+                
+                self.is_drag_active = False
+                
+                event.acceptProposedAction()
+        except Exception as e:
+            print(f"Error in dropEvent: {e}")
+            # Reset to safe state
+            self.context_container.setStyleSheet("background-color: #fafafa;")
             self.is_drag_active = False
-            
-            event.acceptProposedAction()
+            event.ignore()
     
     def closeEvent(self, event):
-        # Save state before closing
-        self.save_state()
+        try:
+            # Cancel any running threads
+            for context in self.contexts:
+                if hasattr(context, 'file_thread') and hasattr(context.file_thread, 'isRunning') and context.file_thread.isRunning():
+                    context.file_thread.terminate()
+                    context.file_thread.wait()
+            
+            # Save state before closing
+            self.save_state()
+        except Exception as e:
+            print(f"Error in closeEvent: {e}")
         event.accept()
 
 
@@ -433,12 +547,15 @@ def main() -> None:
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
 
-    # Create and show the main window
-    window = PromptDeck()
-    window.show()
-
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+    try:
+        # Create and show the main window
+        window = PromptDeck()
+        window.show()
+        
+        sys.exit(app.exec())
+    except Exception as e:
+        print(f"Fatal error in application: {e}")
+        # Show error dialog
+        if QApplication.instance():
+            QMessageBox.critical(None, "Fatal Error", f"Application crashed: {e}")
+        sys.exit(1)
